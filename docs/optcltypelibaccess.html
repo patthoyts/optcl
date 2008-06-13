@@ -1,0 +1,293 @@
+<html>
+
+<head>
+<meta http-equiv="Content-Type"
+content="text/html; charset=iso-8859-1">
+<title>Type Library Access</title>
+</head>
+
+<body bgcolor="#FFFFFF">
+
+<p align="center"><img
+src="optcl_large.gif" width="172"
+height="176"></p>
+
+<h1 align="center">Type Library Access</h1>
+
+<p>OpTcl provides two means of accessing the type information
+stored in a Type Library - graphical or command-line based, with
+the graphical version being built on top of the command-line
+commands. </p>
+
+<h2 align="left">Command Line Access of Type Libraries</h2>
+
+<p align="left">The command line access to type libraries is
+implemented with the <em>typelib</em> namespace. Here's its
+synopsis:</p>
+
+<dl>
+    <dd><a href="#typelib::alllibs"><strong>typelib::alllibs</strong></a></dd>
+    <dd><a href="#typelib::updatelibs"><strong>typelib::updatelibs</strong></a></dd>
+    <dd><a href="#typelib::libdetail"><strong>typelib::libdetail</strong></a><strong>
+        </strong><em>fulllibname </em></dd>
+    <dd><a href="#typelib::load"><strong>typelib::load</strong></a>
+        <em>fulllibname</em></dd>
+    <dd><a href="#typelib::unload"><strong>typelib::unload</strong></a>
+        <em>fulllibname</em></dd>
+    <dd><a href="#typelib::isloaded"><strong>typelib::isloaded</strong></a>
+        <em>fulllibname</em></dd>
+    <dd><a href="#typelib::loaded"><strong>typelib::loaded</strong></a></dd>
+    <dd><a href="#typelib::types"><strong>typelib::types</strong></a>
+        <em>libname</em></dd>
+    <dd><a href="#typelib::typeinfo"><strong>typelib::typeinfo</strong></a>
+        <em>libname.type </em>?<em>element</em>?</dd>
+    <dt>&nbsp;</dt>
+</dl>
+
+<h3>Description</h3>
+
+<h4><a name="typelib::alllibs">typelib::alllibs</a></h4>
+
+<p>The <strong>typelib::alllibs</strong> command returns a list
+of registered libraries by their human readable names.</p>
+
+<h4><a name="typelib::updatelibs">typelib::updatelibs</a></h4>
+
+<p>The <strong>typelib::updatelibs</strong> command update OpTcl's
+internal list of registered libraries from the system registry.</p>
+
+<h4><a name="typelib::libdetail">typelib::libdetail</a></h4>
+
+<p>The <strong>typelib::libdetail</strong> command returns a list
+of three elements - the unique identifier for the library, its
+major version number, and its minor version number.</p>
+
+<h4><a name="typelib::load">typelib::load</a></h4>
+
+<p>The <strong>typelib::load</strong> takes as its only parameter,
+the human readable name of a registered Type Library. If
+successful in loading the library, the command returns the
+programmatic name for the library. Otherwise, the function
+returns an error.</p>
+
+<h4><a name="typelib::unload">typelib::unload</a></h4>
+
+<p>The <strong>typelib::unload</strong> command takes as its only
+parameter, the human readable library name of a registered Type
+Library. If the library has been loaded, it is subsequently
+unloaded.</p>
+
+<h4><a name="typelib::isloaded">typelib::isloaded</a></h4>
+
+<p>The <strong>typelib::isloaded</strong> command returns true if
+and only if its only argument is the user readable name of a
+library that is currently loaded.</p>
+
+<h4><a name="typelib::loaded">typelib::loaded</a></h4>
+
+<p>The <strong>typelib::loaded</strong> command returns a list of
+the currently loaded libraries, in terms of their programmatic
+names.</p>
+
+<h4><a name="typelib::types">typelib::types</a></h4>
+
+<p>The <strong>typelib::types</strong> command takes as its only
+required parameter, a programmatic name for a loaded library. It
+returns as its result a list of types defined in the library.
+Each element of this list is composed of two elements: a type
+category followed by the <a href="optcltypes.html">name of the
+type</a>. Types fall into one of the following categories.</p>
+
+<table border="0" cellpadding="4" cellspacing="4">
+    <tr>
+        <td valign="top"><strong>Category</strong></td>
+        <td valign="top"><strong>Description</strong></td>
+    </tr>
+    <tr>
+        <td valign="top"><strong>enum</strong></td>
+        <td valign="top">An enumeration type.</td>
+    </tr>
+    <tr>
+        <td valign="top"><strong>struct</strong></td>
+        <td valign="top">A record/structure type.</td>
+    </tr>
+    <tr>
+        <td valign="top"><strong>union</strong></td>
+        <td valign="top">A union type. Currently OpTcl can't
+        manipulate these.</td>
+    </tr>
+    <tr>
+        <td valign="top"><strong>typedef</strong></td>
+        <td valign="top">An alias to another type.</td>
+    </tr>
+    <tr>
+        <td valign="top"><strong>module</strong></td>
+        <td valign="top">Globally declared functions (currently,
+        OpTcl cannot call these).</td>
+    </tr>
+    <tr>
+        <td valign="top"><strong>interface</strong></td>
+        <td valign="top">A collection of functions that implement
+        the objects methods, and its properties (get and set
+        functions). OpTcl cannot call these directly.</td>
+    </tr>
+    <tr>
+        <td valign="top"><strong>dispatch</strong></td>
+        <td valign="top">The same as interface, except that OpTcl
+        can call these directly. Usually a dispatch interface
+        wraps an inherited interface type.</td>
+    </tr>
+    <tr>
+        <td valign="top"><a name="class"><strong>class</strong></a></td>
+        <td valign="top">A collection of interfaces (or
+        dispatches), broken into two categories: incoming and
+        outgoing. Incoming interfaces are those that are used to
+        invoke methods or access properties of an object, whilst
+        outgoing interfaces generate events from an object. In
+        each category, a class type can specify a default
+        interface. Each OpTcl object is associated with a maximum
+        of one class type.</td>
+    </tr>
+</table>
+
+<h4><a name="typelib::typeinfo">typelib::typeinfo</a></h4>
+
+<p>The <strong>typelib::typeinfo</strong> command returns
+information for either a type (in the form <em>lib.type</em>) or,
+if provided as the last parameter, an element of a type. These
+two forms are described as follows.</p>
+
+<h5>Type Information</h5>
+
+<p>The first form returns a list with four items. The first item
+is the type's category. The second is a list of methods supported
+by the type; the third is a list of properties for the type. The
+last item is a list of <a href="optcltypes.html">fully formed
+names</a> of inherited types.</p>
+
+<h5>Element Information</h5>
+
+<p>Information of an element is stored in a list of three
+elements: the category of the element (either <em>method</em> or <em>property</em>),
+its signature, and documentation string (null, if not provided by
+the library). </p>
+
+<p>The format for an element's signature is based upon the
+elements category. <em>method</em> elements return a signature
+that is a list, with the first item being the return type of the
+method, the second being the name of the method, and the
+remaining elements being its <a href="#Parameters">parameters</a>.</p>
+
+<p>For a <em>property</em> element, the signature is a list with
+the first element being the access flags to the property (a
+combination of <em>read</em> or <em>write</em>), followed by the
+properties type and its name. The remaining list elements are the
+<a href="#Parameters">parameters</a> required to access an
+indexed property.</p>
+
+<h4><a name="Parameters">Parameters</a></h4>
+
+<p>A parameter description in OpTcl is a list with three required
+members and one optional. </p>
+
+<p>The first list element is a collection of flags describing the
+direction of information flow for the parameter. This can either
+be <em>in</em>, <em>out</em>, or both together. A parameter
+flagged as <em>in</em> indicates that information flows from the
+caller to the callee (by value call). A parameter flagged with <em>out</em>
+indicates that information flows from the callee to the caller.
+In the case of both flags being present, the information flow is
+bi-directional (call by reference). It is important to note the
+significance of this when operating with COM objects from OpTcl.
+A parameter that is <em>out</em> or <em>inout</em> requires the
+name of a Tcl variable to hold the value of the parameter. In the
+case of <em>inout</em> the variable must exist prior to the
+method call. Currently, OpTcl doesn't make full use of type
+information for event handling. All parameters of an event are
+passed to Tcl by-value only, for the time being.</p>
+
+<p>The second list element is the <a href="optcltypes.html">correctly
+formed type-name</a> of the parameter. The third list element is
+the parameters name. The final optional list element is either a
+question mark, '?', indicating that the parameter is optional, or
+some other value, denoting a default value. OpTcl currently does
+not fill-in missing parameters with their default values.</p>
+
+<h2>Graphical Method for Accessing Type Libraries</h2>
+
+<p>For this OpTcl defines the <em>tlview</em> namespace. Here is
+a synopsis of the commands defined within it:</p>
+
+<dl>
+    <dd><a href="#tlview::refview"><strong>tlview::refview</strong></a>
+        <em>windowpath</em> </dd>
+    <dd><a href="#tlview::loadedlibs"><strong>tlview::loadedlibs</strong></a>
+        <em>windowpath</em> </dd>
+    <dd><a href="#tlview::viewlib"><strong>tlview::viewlib</strong></a>
+        <em>libname</em> </dd>
+    <dd><a href="#tlview::viewtype"><strong>tlview::viewtype</strong></a>
+        <em>libname.typename</em> </dd>
+</dl>
+
+<h3>Description</h3>
+
+<h4><a name="tlview::refview">tlview::refview</a></h4>
+
+<p>The <strong>tlview::refview</strong> command creates a
+toplevel window that displays a list of system-registered
+typelibraries. Here's a screen-shot:</p>
+
+<p><img src="refview.gif" width="406" height="367"></p>
+
+<p>In blue are the libraries currently loaded by OpTcl; the
+others aren't loaded. The Refresh button updates the list.
+Clicking on a library, either loads or unloads it, depending on
+its currently status. At the bottom of the screen, a status bar
+informs of result of the most recent operation.</p>
+
+<h4><a name="tlview::loadedlibs">tlview::loadedlibs</a></h4>
+
+<p>Once a library is loaded, it is referenced within OpTcl using
+a programmatic identifier; in fact, this is true for any client
+of COM's type-libraries - e.g. Visual Basic. The <strong>tlview::loadedlibs</strong>
+command creates a toplevel window, hosting a list of currently
+loaded libraries, in terms of their programmatic id. Heres's a
+screen-shot:</p>
+
+<p align="left"><img src="loadedlibs.gif" width="203"
+height="154"></p>
+
+<h4 align="left"><a name="tlview::viewlib">tlview::viewlib</a></h4>
+
+<p align="left">The list is automatically updated, every time the
+window receives mouse focus. Here's where the fun begins. Each
+element is mouse-sensitive - clicking on one creates a browser
+window for that library. At any time, a type browser can be
+opened using <strong>tlview::viewlib</strong> command. The system
+ensures that there is only one browser per library. Here's a grab
+of browser in action:</p>
+
+<p align="left"><img src="viewlib1.gif" width="465" height="379"></p>
+
+<p align="left">The left-hand pane contains a list of types
+within the library. Clicking on any type displays its elements in
+the right-hand pane. Elements in a typelibrary are organised in
+terms of methods, properties and inherited types. The right-hand
+pane sorts the elements into these basic groups. The lower pane
+gives a description of the element last clicked. If the type
+library provides any describing text for that element that is
+also displayed. In the lower pane, if a non-primitive type is
+used to describe either a property or an element of a method,
+then that type will also be click-sensitive. For a more detailed
+explanation please read the section on accessing elements of a
+type.</p>
+
+<h4 align="left"><a name="tlview::viewtype">tlview::viewtype</a></h4>
+
+<p align="left">The <strong>tlview::viewtype</strong> command can
+call-up a browser window to view the details of a specific type
+in a Type Library.</p>
+
+<p><font size="1">Copyright (c) 1999, Farzad Pezeshkpour</font></p>
+</body>
+</html>

@@ -1,0 +1,51 @@
+Conversion
+	VT_EMPTY = 0,			// 0
+	VT_VOID	= 24,			// 0
+	VT_NULL	= 1,			//  0
+
+
+	VT_VARIANT	= 12,		// VARIANT * - decode by reference
+
+	VT_ERROR	= 10,		// short
+	VT_I2	= 2,			// short
+	VT_UI1	= 17,			// short
+
+	VT_I4	= 3,			// long
+	VT_UI2	= 18,			// long
+	VT_INT	= 22,			// long
+
+	VT_R4	= 4,			// float
+	VT_R8	= 5,			// real
+
+	VT_BOOL	= 11,			// boolean
+
+	VT_UNKNOWN	= 13,		// object
+	VT_DISPATCH	= 9,		// object
+
+	VT_I1	= 16,			// char
+
+
+	*** VT_DECIMAL	= 14,		// can't - string? no
+	*** VT_CARRAY	= 28,		// ?
+
+
+	VT_CY	= 6,			// string
+	VT_DATE	= 7,			// string
+	VT_BSTR	= 8,			// string
+
+	VT_UI4	= 19,			// string
+	VT_I8	= 20,			// string 
+	VT_UI8	= 21,			// string
+	VT_UINT	= 23,			// string
+
+	VT_HRESULT	= 25,		// HRESULT2Str
+	VT_SAFEARRAY	= 27,		// tcl list
+	VT_USERDEFINED	= 29,		// type info require
+	VT_RECORD	= 36,		// tcl list? - creating might be a bit hard
+	VT_VECTOR	= 0x1000,	// tcl list?
+	VT_ARRAY	= 0x2000,	// tcl list
+	VT_BYREF	= 0x4000,	// pointer to value - eek
+
+
+convert an object to a variant using type k
+template <class T> f (VARIANT *p

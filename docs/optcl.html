@@ -1,0 +1,100 @@
+<html>
+
+<head>
+<meta http-equiv="Content-Type"
+content="text/html; charset=iso-8859-1">
+<meta name="GENERATOR" content="Microsoft FrontPage Express 2.0">
+<title>OpTcl Documentation</title>
+</head>
+
+<body bgcolor="#FFFFFF">
+
+<p align="center"><img src="optcl_large.gif" width="172"
+height="176"><br>
+<font size="2" face="Arial"><strong>version 3.0 build 04</strong></font></p>
+
+<p align="center"><a href="mailto:fuzz@sys.uea.ac.uk">Farzad
+Pezeshkpour</a></p>
+
+<p align="center">August 1999</p>
+
+<p>This software is freely distributed under the GNU Public
+Licence. I've include this in this distribution as an HTML file.</p>
+
+<p>Gosh! So much to document here, and so little time. This is a
+preliminary, and rather informal document - a better version is
+on its way!</p>
+
+<h1>The Distribution</h1>
+
+<p>The following is a description of the directory structure for
+the distribution:</p>
+
+<table border="0" cellpadding="4" cellspacing="4">
+    <tr>
+        <td><strong>install</strong></td>
+        <td>Holds the installer script and two versions of the
+        DLL - one for Tcl 8.0.5 (no stubs), and one with stubs
+        enabled, built for Tcl 8.2 libraries.</td>
+    </tr>
+    <tr>
+        <td><strong>docs</strong></td>
+        <td>Documentation.</td>
+    </tr>
+    <tr>
+        <td><strong>src</strong></td>
+        <td>The source for OpTcl with Visual C++ v6.0 (sp3)
+        workspace.</td>
+    </tr>
+    <tr>
+        <td><strong>tests</strong></td>
+        <td>A couple of test scripts using MS Word, and the
+        Calendar Control.</td>
+    </tr>
+</table>
+
+<p>To install, run the install script <em>optcl_install.tcl</em>.
+This will autodetect your version and location of your Tcl and
+select the appropriate installation settings. The installer
+copies the suitable DLL &lt;tcl_lib&gt;/../optcl/optcl.dll, and <em>pkg_mkIndex</em>
+is applied to that directory.</p>
+
+<p>The package can now be used by loaded using the command:</p>
+
+<pre>	package require optcl</pre>
+
+<h1>Things To Do</h1>
+
+<ul>
+    <li>Distribute example files.</li>
+    <li>Implement array parameters.</li>
+    <li>Implement default parameter values.</li>
+    <li>Test <em>out</em>-flagged parameters (I haven't found a
+        server to do this, yet).</li>
+    <li>Implement <em>in/out</em>-flagged parameters for events.</li>
+    <li>Use Type Libraries on the type conversion of an event-handlers
+        result.</li>
+    <li>Test with DCOM. (does anyone have a setup that can do
+        this?)</li>
+    <li>Write an ActiveScripting engine interface.</li>
+    <li>In some cases perhaps, reconsider syntax.</li>
+</ul>
+
+<h1>Known Bugs/Limitations</h1>
+
+<ul>
+    <li>Not thread-safe.</li>
+    <li>Can't set parameters by their name, à la Visual Basic.</li>
+    <li>Microsoft Forms ActiveX objects can't be fully in-place
+        activated.</li>
+</ul>
+
+<h1>Credits</h1>
+
+<p>This work uses ideas developed by Jacob Levy in his Taxi
+specification. I am very grateful for his helpful comments and
+encouragement.</p>
+
+<p><font size="1">Copyright (c) 1999, Farzad Pezeshkpour</font></p>
+</body>
+</html>

@@ -1,0 +1,178 @@
+<html>
+
+<head>
+<meta http-equiv="Content-Type"
+content="text/html; charset=iso-8859-1">
+<title>Optcl Objects</title>
+</head>
+
+<body bgcolor="#FFFFFF">
+
+<p align="center"><img
+src="optcl_large.gif" width="172"
+height="176"></p>
+
+<h1 align="center">Objects</h1>
+
+<p align="left">The manipulation of objects in OpTcl is performed
+with commands defined in the <em>optcl</em> namespace. The
+following is the synopsis of this namespace.</p>
+
+<dl>
+    <dd><a href="#optcl::new"><strong>optcl::new</strong></a> ?-start?
+        ?-window <em>windowname</em>? <em>CLSID_ProgID_DocumentURL_HTML</em></dd>
+    <dd><a href="#Reference Management"><strong>optcl::lock</strong></a>
+        <em>objid</em></dd>
+    <dd><a href="#Reference Management"><strong>optcl::unlock</strong></a><em>
+        objid</em> ?<em>objid</em> ...?</dd>
+    <dd><a href="#optcl::isobject"><strong>optcl::isobject</strong></a>
+        <em>objid</em></dd>
+    <dd><a href="#optcl::interface"><strong>optcl::interface</strong></a>
+        <em>objid </em>?<em>new_interface_name</em>?</dd>
+    <dd><a href="#optcl::class"><strong>optcl::class</strong></a>
+        <em>objid</em></dd>
+    <dd><a href="#optcl::bind"><strong>optcl::bind</strong></a> <em>objid
+        eventname tcl_procedure</em></dd>
+    <dd><a href="#Object Command"><em>objid</em></a> ?-with <em>subobj</em>?
+        <em>methodname </em>?<em>arg</em> ...?</dd>
+    <dd><a href="#Object Command"><em>objid</em></a> ?-with <em>subobj</em>?
+        <strong>:</strong> <em>propname</em> ?<em>new_value</em>?</dd>
+    <dd><a href="#Object Command"><em>objid</em></a> ?-with <em>subobj</em>?
+        <strong>:</strong> <em>propname(index</em>?, <em>index</em>
+        ...?) ?<em>new_value</em>?</dd>
+</dl>
+
+<h2>Description</h2>
+
+<h3><a name="optcl::new">optcl::new</a></h3>
+
+<p>The <strong>optcl::new</strong> command creates or attaches to
+existing COM objects, returning a unique object identifier, if
+successful. The -start flag is used to indicate that the call
+should always create a new instance of the object. The -window
+option creates with the COM object, a Tk widget that will attempt
+to in-place activate the user interface of the object. Not all
+COM objects provide a user interface, and not all objects with
+user-interfaces will in-place activate. </p>
+
+<p>The final parameter of the command is an identifier for the
+COM class of the object. This can take four different forms:
+CLSID, ProgID, document path or raw HTML. Currently, the latter
+two only work with the -window option. A CLSID is a string
+representation of a COM Globally Unique IDentifer (GUID for short).
+CLSIDs uniquely identify the location of a COM class server
+through the system registry. To successfully create an instance
+of the COM class, the server must be correctly registered with
+the system registery. An example of a CLSID is <em>{8E27C92B-1264-101C-8A2F-040224009C02}</em>
+(the CLSID for the Calendar Control). In order to pass a CLSID
+correctly to the <strong>optcl::new</strong> command, the CLSID
+must be wrapped in an extra pair of braces. This will ensure that
+the bracing surrounding the CLSID is not stripped by the Tcl
+interpreter. For example, <em>{{8E27C92B-1264-101C-8A2F-040224009C02}}</em>.
+A ProgID (programmatic identifier) is a human readable name that
+performs the same job as a CLSID. For example, <em>MSCAL.Calendar.7</em>.
+</p>
+
+<p>Additionally, the command can take two further forms of
+identifer. A URL to a document with a correctly registered
+document server, or an inline HTML. Both these options are only
+available currently with in-place activation only (-window option)
+and require the installation of Internet Explorer 4.0 or above.
+To use inline HTML, the source string must begin with the
+characters &quot;mshtml:&quot;.</p>
+
+<h3><a name="Reference Management">Reference Management</a></h3>
+
+<p>At the time of writing, OpTcl cannot provide a robust
+automatic handling of object lifetimes. So for now, the <strong>optcl::lock</strong>
+and <strong>optcl::unlock</strong> commands provide explicit
+means for respectively incrementing or decrementing the reference
+count on an object. On creation, the reference count of an object
+is one. If, the reference count of an object becomes zero, the
+object is destroyed, together with its Tk container window, if
+one exists. Furthermore, the destruction of a container window,
+will immediately destroy its related object.</p>
+
+<h3><a name="optcl::isobject">optcl::isobject</a></h3>
+
+<p>The <strong>optcl::isobject</strong> command returns true if
+and only if its only parameter is an OpTcl object.</p>
+
+<h3><a name="optcl::interface">optcl::interface</a></h3>
+
+<p>The <strong>optcl::interface</strong> command performs the
+role of querying the current interface name of an OpTcl object,
+or setting it to a new interface type. COM objects are
+polymorphic, in that they can (and often do) support multiple
+interfaces. In OpTcl an interface name is a <a
+href="optcltypes.html">properly formed type</a>, and hence can be
+browsed with the <a href="optcltypelibaccess.html">Type Library
+Access functionality</a> of OpTcl. One can discover the supported
+interfaces of an object by <a href="#optcl::class">finding</a>
+and viewing details of its <a
+href="optcltypelibaccess.html#class">COM class</a>. The initial
+interface of an object, is its default interface.</p>
+
+<h3><a name="optcl::class">optcl::class</a></h3>
+
+<p>The <strong>optcl::class</strong> command returns the <a
+href="optcltypelibaccess.html#class">class name</a> of the object.
+If no class name information is provided, the command returns
+'???'.</p>
+
+<h3><a name="optcl::bind">optcl::bind</a></h3>
+
+<p>The <strong>optcl::bind</strong> command binds an event from
+an object to a Tcl procedure name. The event can either be the
+name of an event on the default interface, or the name of an
+event on another event interface. The latter must take the form <em>lib.eventinterface.event</em>.
+The Tcl procedure will be called with the first parameter being
+the object identifier of the OpTcl object raising the event,
+followed by the parameters of the event itself.</p>
+
+<h3><a name="Object Command">Object Command</a></h3>
+
+<p>The object identifer returned from <a href="#optcl::new"><strong>optcl::new</strong></a>,
+is also a Tcl command for the lifetime of the object. Using the
+command, we can invoke the object's methods, and properties. As a
+means to improving efficiency, both forms of member access can be
+applied to a <a href="#Sub-Objects">sub-object</a> of the invoked
+OpTcl object. Methods can be invoked on an object, by appending
+to the object command (with a possible sub-object), the method
+name and its <a href="optcltypelibaccess.html#Parameters">parameters</a>.
+</p>
+
+<p>Access to properties of an OpTcl object are differentiated
+from method invocations by the placement of a <strong>:</strong>
+prior the property name, with white space seperating it from the
+name. For example to set the <em>visible</em> property of an
+object to true, we would use the following syntax:</p>
+
+<pre>	$myobj : visible 1</pre>
+
+<p>And to retrieve it:</p>
+
+<pre>	$myobj : visible
+	<em>==&gt; 1</em></pre>
+
+<p>If the property is indexed, then its index can be specified
+within matching braces as a comma-seperated list. For example:</p>
+
+<pre>	$myobj : grid(3,4) &quot;foo&quot;</pre>
+
+<h3><a name="Sub-Objects">Sub-Objects</a></h3>
+
+<p>COM objects often have deep hierarchies of objects, reachable
+from the created object. In many cases it may be inefficient to
+represent several of these objects within the hierarchy as OpTcl
+objects, in order to access a single object. For this purpose,
+the object command can take the -with option. This is a dot
+seperated list of sub-objects that it has to traverse before
+invoking the method or property. For example:</p>
+
+<pre>	$app -with documents(1) save
+	$xl -with workbooks(1).worksheets(sheet1).range(a1,b2) : value 15</pre>
+
+<p><font size="1">Copyright (c) 1999, Farzad Pezeshkpour</font></p>
+</body>
+</html>

@@ -1,0 +1,112 @@
+<html>
+
+<head>
+<meta http-equiv="Content-Type"
+content="text/html; charset=iso-8859-1">
+<title>Types In Optcl</title>
+</head>
+
+<body bgcolor="#FFFFFF">
+
+<p align="center"><img src="optcl_large.gif" width="172"
+height="176"></p>
+
+<h1 align="center">Types</h1>
+
+<h2>Type Libraries</h2>
+
+<p>In order to precisely describe the interface and (in some
+cases!) the functionality of a COM object, COM defines a language
+independant mechanism for describing types, called Type Libraries.
+You can think of these as a machine readable superset of header
+files. Using Type Libraries, the interfaces (more about these
+later), methods, events and properties of an object can be
+accurrately described. </p>
+
+<p>Having this kind of information is very important as it can a)
+allow for the accurate type conversion between Tcl objects and
+COM types, and b) speed up an invocation on an object. </p>
+
+<p>Optcl is now type library aware - at least in terms of <a
+href="optcltypelibaccess.html">reading</a> them and being type
+sensitive in its invocations. I hope a future version will be
+able to write out Type Libraries.</p>
+
+<p>In OpTcl, types are represented as a strings comprising of the
+programmatic name for a type library and its contained typename,
+joined using a dot. So for example<em>, stdole.IFontDisp</em> is
+the <em>IFontDisp</em> type defined in the library called <em>stdole</em>.
+</p>
+
+<h2>Primitive Types</h2>
+
+<p>The only exception to the formatting rule specified above are
+primitive. These are always a single word with no '.' delimiter.
+They are listed in the following table:</p>
+
+<table border="1" cellpadding="3" cellspacing="4">
+    <tr>
+        <td><strong>Type</strong></td>
+        <td><strong>Description</strong></td>
+        <td><strong>Type</strong></td>
+        <td><strong>Description</strong></td>
+    </tr>
+    <tr>
+        <td>char</td>
+        <td>A single character</td>
+        <td>string</td>
+        <td>single byte string</td>
+    </tr>
+    <tr>
+        <td>uchar</td>
+        <td>An unsigned character</td>
+        <td>carray</td>
+        <td>C-style array - not currently supported</td>
+    </tr>
+    <tr>
+        <td>short</td>
+        <td>16 bit signed integer</td>
+        <td>decimal</td>
+        <td>96-bit number</td>
+    </tr>
+    <tr>
+        <td>ushort</td>
+        <td>16 bit unsigned integer</td>
+        <td>float</td>
+        <td>32 bit real number</td>
+    </tr>
+    <tr>
+        <td>long</td>
+        <td>32 bit signed integer</td>
+        <td>double</td>
+        <td>64 bit real number</td>
+    </tr>
+    <tr>
+        <td>ulong</td>
+        <td>32 bit unsigned integer</td>
+        <td>dispatch</td>
+        <td>Scriptable interface to an object</td>
+    </tr>
+    <tr>
+        <td>bool</td>
+        <td>boolean</td>
+        <td>interface</td>
+        <td>Non-scriptable interface to an object</td>
+    </tr>
+    <tr>
+        <td>date</td>
+        <td>Date type.</td>
+        <td>currency</td>
+        <td>Currency. Range: ±922337203685477.5807</td>
+    </tr>
+    <tr>
+        <td>any</td>
+        <td>A variant type.</td>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+    </tr>
+</table>
+
+<p><font size="1">Copyright (c) 1999, Farzad Pezeshkpour</font></p>
+</body>
+</html>
