@@ -21,13 +21,6 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_UK
 #pragma code_page(1252)
 #endif //_WIN32
 
-/////////////////////////////////////////////////////////////////////////////
-//
-// TCL_SCRIPT
-//
-
-IDR_TYPELIB             TCL_SCRIPT DISCARDABLE  "typelib.tcl"
-
 #ifdef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -80,15 +73,15 @@ BEGIN
             VALUE "Comments", "Requires Tcl/Tk major version 8, minor version >= 1\0"
             VALUE "CompanyName", "University of East Anglia\0"
             VALUE "FileDescription", "A Tcl extension for manipulating COM objects.\0"
-            VALUE "FileVersion", "3,0,0,2\0"
+            VALUE "FileVersion", "3,0,1,0\0"
             VALUE "InternalName", "optcl\0"
             VALUE "LegalCopyright", "Copyright © 1999\0"
             VALUE "LegalTrademarks", "-\0"
             VALUE "OriginalFilename", "optcl.dll\0"
             VALUE "PrivateBuild", "-\0"
             VALUE "ProductName", "OpTcl\0"
-            VALUE "ProductVersion", "3,0,0,2\0"
-            VALUE "SpecialBuild", "-\0"
+            VALUE "ProductVersion", "3,0,1,0\0"
+            VALUE "SpecialBuild", "threaded\0"
         END
     END
     BLOCK "VarFileInfo"

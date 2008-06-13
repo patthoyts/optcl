@@ -39,11 +39,11 @@ pack .cal
 # bind to the calendar AfterUpdate event
 # routing it to the tcl procedure onupdate
 #
-optcl::bind $cal AfterUpdate onupdate
+#optcl::bind $cal AfterUpdate onupdate
 
 
 # get the current value
-set currentdate [$cal : value]
+#set currentdate [$cal : value]
 
 
 # make a button to view the type information of 

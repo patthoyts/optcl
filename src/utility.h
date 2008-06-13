@@ -43,11 +43,21 @@
 void OptclTrace(LPCTSTR lpszFormat, ...);
 #else
 #	define TRACE
-#endif
+#endif // _DEBUG
+
+// TRACE_OPTCLOBJ
+// Gives a trace output for an optcl object, in terms of its name, current interface, and reference count
+#ifdef _DEBUG
+#	define TRACE_OPTCLOBJ(obj)	{TObjPtr interfacename; obj->InterfaceName(interfacename); OptclTrace("%s %s --> %d\n", (char*)interfacename, obj->m_name.c_str(), obj->m_refcount);}
+#else
+#	define TRACE_OPTCLOBJ
+#endif // _DEBUG
+
+
 
 #define TCL_CMDEF(fname) int fname (ClientData cd, Tcl_Interp *pInterp, int objc, Tcl_Obj *CONST objv[])
 #define CHECKHR(hr) if (FAILED(hr)) throw(hr)
-#define CHECKHR_TCL(hr, i, v) if (FAILED(hr)) {Tcl_SetResult (i, HRESULT2Str(hr), TCL_DYNAMIC); return v;}
+#define CHECKHR_TCL(hr, i, v) {HRESULT _hr = (hr); if (FAILED(_hr)) {Tcl_SetResult (i, HRESULT2Str(_hr), TCL_DYNAMIC); return v;}}
 
 #define SETDISPPARAMS(dp, numArgs, pvArgs, numNamed, pNamed) \
     {\
@@ -61,6 +71,33 @@ void OptclTrace(LPCTSTR lpszFormat, ...);
 
 #define _countof(x) (sizeof(x)/sizeof(x[0]))
 
+
+template <class T>
+class auto_array {
+public:
+	typedef T* TPTR;
+	auto_array () : m_ptr(NULL) {}
+	auto_array(unsigned long items) : m_ptr(NULL) {
+		Allocate(items);
+	}
+	~auto_array() { ReleaseArray();}
+	void ReleaseArray () {
+		if (m_ptr != NULL) {
+			delete [] m_ptr;
+			m_ptr = NULL;
+		}
+	}
+	TPTR Allocate(unsigned long items) {
+		ReleaseArray();
+		m_ptr = new T[items];
+		return m_ptr;
+	}
+	operator TPTR () {
+		return m_ptr;
+	}
+protected:
+	TPTR m_ptr;
+};
 
 template <class T> void		delete_ptr (T* &ptr)
 {
@@ -83,11 +120,15 @@ template <class T> T* delete_array (T *&ptr) {
 
 class OptclObj;
 
-bool		var2obj (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &presult, OptclObj **ppObj = NULL);
+bool		var2obj (Tcl_Interp *pInterp, VARIANT &var, ITypeInfo *pti, TObjPtr &presult, OptclObj **ppObj = NULL);
 bool		obj2var_ti (Tcl_Interp *pInterp, TObjPtr &obj, VARIANT &var, ITypeInfo *pInfo, TYPEDESC *pdesc);
 bool		obj2var_vt (Tcl_Interp *pInterp, TObjPtr &obj, VARIANT &var, VARTYPE vt);
 bool		obj2var_vt_byref (Tcl_Interp *pInterp, TObjPtr &obj, VARIANT &var, VARTYPE vt);
 void		obj2var (TObjPtr &obj, VARIANT &var);
+bool		record2obj (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &result);
+bool		obj2record (Tcl_Interp *pInterp, TObjPtr &obj, VARIANT &var, ITypeInfo *pinf);
+bool		obj2picture(Tcl_Interp *pInterp, TObjPtr &obj, VARIANT &var);
+
 
 
 void		OptclVariantClear (VARIANT *pvar);
@@ -103,8 +144,8 @@ int			ObjectNotFound (Tcl_Interp *pInterp, const char *name);
 void		SplitTypedString (char *pstr, char ** ppsecond);
 bool		SplitObject (Tcl_Interp *pInterp, Tcl_Obj *pObj, 
 						 const char * tokens, Tcl_Obj **ppResult);
-bool		SplitBrackets (Tcl_Interp *pInterp, Tcl_Obj *pObj,
-						   TObjPtr & result);
+bool		SplitBrackets (Tcl_Interp *pInterp, Tcl_Obj *pObj, TObjPtr & result);
+bool		TypeInfoResolveAliasing (Tcl_Interp *pInterp, ITypeInfo * pti, ITypeInfo ** presolved);
 
 /// TESTS
 TCL_CMDEF (Obj2VarTest);

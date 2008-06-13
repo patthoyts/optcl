@@ -38,7 +38,7 @@
 HINSTANCE			ghDll = NULL;
 CComModule			_Module;
 CComPtr<IMalloc>	g_pmalloc;
-
+bool				g_bTkInit = false;
 //----------------------------------------------------------------
 
 // Function declarations
@@ -394,7 +394,7 @@ TCL_CMDEF(OptclInvokeLibFunction)
 					CHECKHR_TCL(hr, pInterp, TCL_ERROR);
 				if (FAILED(hr))
 					return TCL_ERROR;
-				if (bOk = var2obj(pInterp, varResult, presult))
+				if (bOk = var2obj(pInterp, varResult, NULL, presult))
 					Tcl_SetObjResult (pInterp, presult);
 				VariantClear(&varResult);
 			}
@@ -623,6 +623,7 @@ int Optcl_Init (Tcl_Interp *pInterp)
 		// initialise the Tk stubs - failure 
 		if (Tk_InitStubs (pInterp, "8.0", 0) == NULL)
 			return TCL_ERROR;
+		g_bTkInit = true;
 	}
 #else
 #error Wrong Tcl version for Stubs
@@ -630,11 +631,14 @@ int Optcl_Init (Tcl_Interp *pInterp)
 #endif // USE_TCL_STUBS
 
 	HRESULT hr;
+	Tcl_PkgProvide(pInterp, "optcl", "3.0");
+
 	OleInitialize(NULL);
 	hr = CoGetMalloc(1, &g_pmalloc);
 	CHECKHR_TCL(hr, pInterp, TCL_ERROR);
 
 	Tcl_CreateExitHandler (Optcl_Exit, NULL);
+	/*
 	HRSRC hrsrc = FindResource (ghDll, MAKEINTRESOURCE(IDR_TYPELIB), _T("TCL_SCRIPT"));
 	if (hrsrc == NULL) {
 		Tcl_SetResult (pInterp, "failed to locate internal script", TCL_STATIC);
@@ -652,6 +656,7 @@ int Optcl_Init (Tcl_Interp *pInterp)
 	ASSERT (szscript != NULL);
 	if (Tcl_GlobalEval (pInterp, szscript) == TCL_ERROR)
 		return TCL_ERROR;
+	*/
 
 	Tcl_CreateObjCommand (pInterp, "optcl::new", OptclNewCmd, NULL, NULL);
 	Tcl_CreateObjCommand (pInterp, "optcl::lock", OptclLockCmd, NULL, NULL);

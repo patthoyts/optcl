@@ -32,7 +32,8 @@
 #include "typelib.h"
 #include "objmap.h"
 #include "optclbindptr.h"
-
+#include "optcltypeattr.h"
+#include <strstream>
 
 //----------------------------------------------------------------
 //				\/\/\/\/\/\ Declarations /\/\/\/\/\/\/
@@ -63,7 +64,9 @@ TCL_CMDEF(TypeLib_UnloadLib);
 TCL_CMDEF(TypeLib_IsLibLoaded);
 TCL_CMDEF(TypeLib_TypesInLib);
 TCL_CMDEF(TypeLib_TypeInfo);
-
+TCL_CMDEF(TypeLib_GetRegLibPath);
+TCL_CMDEF(TypeLib_GetLoadedLibPath);
+TCL_CMDEF(TypeLib_GetDetails);
 
 //// TEST CODE ////
 TCL_CMDEF(TypeLib_ResolveConstantTest);
@@ -102,65 +105,35 @@ void TypeLibsTbl::DeleteAll ()
 	deltbl();
 }
 
-
-ITypeLib * TypeLibsTbl::LoadLib (Tcl_Interp *pInterp, const char *fullname)
+/*
+ *-------------------------------------------------------------------------
+ * TypeLibsTbl::LoadLib --
+ *	Load a Type Library by it's pathname.
+ *
+ * Result:
+ *	Pointer to the TypeLib object iff successful.
+ * Side Effects:
+ *	Library is added to the cache
+ *-------------------------------------------------------------------------
+ */
+TypeLib * TypeLibsTbl::LoadLib (Tcl_Interp *pInterp, const char *pathname)
 {
 	USES_CONVERSION;
 	CComPtr<ITypeLib> pLib;
-	CComPtr<ITypeComp> pComp;
-
-	TObjPtr		cmd,	// used to build up a command string
-				result, // attaches to the result of the above commands' execution
-				progname; // the programmatic name of the library
-	GUID guid;
-	int maj, min;
-	HRESULT hr;
-
-	Tcl_HashEntry *pEntry = NULL;
-	TypeLib *ptl;
-
-	if (m_loadedlibs.find(fullname, &pEntry) != NULL) {
-		ASSERT (pEntry != NULL);
-		ptl = (TypeLib *)Tcl_GetHashValue (pEntry);
-		ASSERT (ptl != NULL);
-		Tcl_SetResult (pInterp, Tcl_GetHashKey (&m_tbl, pEntry), TCL_VOLATILE);
-		pLib = ptl->m_ptl;
-		ASSERT (pLib != NULL);
-		return pLib;
-	}
-
-
+	
 	try {
-		// get the guid, max and min version numbers
-		cmd.create();
-		cmd = "typelib::libdetail";
-		cmd.lappend (fullname);
-		if (Tcl_GlobalEvalObj (pInterp, cmd) == TCL_ERROR) return NULL;
-		result.attach(Tcl_GetObjResult(pInterp), false);
-		if (result.llength() != 3)
-			throw ("expected three elements in the library description");
+		CComPtr<ITypeComp> pComp;
+		TObjPtr progname, fullname;
+		Tcl_HashEntry *pEntry = NULL;
+		HRESULT hr;
 
-		maj = result.lindex (1);
-		min = result.lindex (2);
-		hr = CLSIDFromString (A2OLE(result.lindex(0)), &guid);
-		if (FAILED(hr)) 
-			throw ("failed to convert identifier");
-
-		// load the library
-		hr = LoadRegTypeLib (guid, maj, min, LOCALE_SYSTEM_DEFAULT, &pLib);
+		hr = LoadTypeLibEx(A2OLE(pathname), REGKIND_NONE, &pLib);
 		CHECKHR(hr);
+		ASSERT(pLib != NULL);
 		if (pLib == NULL)
 			throw ("failed to bind to a type library");
 
-		// get the programmatic name of the library
-		TypeLib_GetName (pLib, NULL, progname);
-
-		hr = pLib->GetTypeComp(&pComp);
-		if (FAILED(hr))
-			throw ("failed to get the compiler interface for library");
-		
-		Cache (progname, fullname, pLib, pComp);
-		Tcl_SetResult (pInterp, (char*)(const char*)progname, TCL_VOLATILE);
+		return Cache (pInterp, pLib, pathname);
 	} 
 
 	catch (char *error) {
@@ -170,7 +143,7 @@ ITypeLib * TypeLibsTbl::LoadLib (Tcl_Interp *pInterp, const char *fullname)
 		Tcl_SetResult (pInterp, (char*)HRESULT2Str(hr), TCL_DYNAMIC);
 	}
 
-	return pLib;
+	return NULL;
 }
 
 
@@ -188,32 +161,107 @@ ITypeLib * TypeLibsTbl::LoadLib (Tcl_Interp *pInterp, const char *fullname)
  *	None.
  *-------------------------------------------------------------------------
  */
-TypeLib* TypeLibsTbl::Cache (const char *szname, const char *szfullname, ITypeLib *ptl, ITypeComp *ptc)
+TypeLib* TypeLibsTbl::Cache (Tcl_Interp *pInterp, ITypeLib *ptl, const char * path /* = NULL */)
 {
-	ASSERT(szname != NULL && szfullname != NULL);
-	ASSERT (ptl != NULL && ptc != NULL);
+	TLIBATTR * ptlattr = NULL;
+	CComPtr<ITypeComp> ptc;
 	TypeLib *pLib = NULL;
 	Tcl_HashEntry *pEntry = NULL;
 
-	pLib = new TypeLib (ptl, ptc);
-	pEntry = set(szname, pLib);
-	ASSERT (pEntry != NULL);
 
-	m_loadedlibs.set (szfullname, pEntry);
+	if (FAILED(ptl->GetLibAttr(&ptlattr))) {
+		if (pInterp)
+			Tcl_SetResult (pInterp, "couldn't retrieve type library attributes", TCL_STATIC);
+		return NULL;
+	}
+
+	ASSERT(ptlattr != NULL);
+
+	TypeLibUniqueID uid (ptlattr->guid, ptlattr->wMajorVerNum, ptlattr->wMinorVerNum);
+
+
+	ptl->ReleaseTLibAttr(ptlattr);
+	
+	// search for this guid
+	if (m_loadedlibs.find(&uid, &pEntry) != NULL) {
+		ASSERT (pEntry != NULL);
+		pLib = (TypeLib *)Tcl_GetHashValue (pEntry);
+		return pLib;
+	} 
+
+	// now generate the names, and do a search on the programmatic name
+	TObjPtr progname, fullname;
+	GenerateNames(progname, fullname, ptl);
+
+	if (g_libs.find((char*)progname, &pLib) != NULL) {
+		if (pInterp)
+			Tcl_SetResult (pInterp, "library already loaded with the same programmatic name", TCL_STATIC);
+		return NULL;
+	} 
+
+	if (FAILED(ptl->GetTypeComp(&ptc))) {
+		if (pInterp)
+			Tcl_SetResult (pInterp, "failed to retrieve the ITypeComp interface", TCL_STATIC);
+		return NULL;
+	}
+
+	pLib = new TypeLib ();
+	if (FAILED(pLib->Init(ptl, ptc, progname, fullname, path))) {
+		delete pLib;
+		pLib = NULL;
+	} else {
+		pEntry = set(progname, pLib);
+		ASSERT (pEntry != NULL);
+		m_loadedlibs.set (&uid, pEntry);
+	}
+
 	return pLib;
 }
 
 
-bool TypeLibsTbl::IsLibLoaded (const char *fullname)
+TypeLib * TypeLibsTbl::TypeLibFromUID (const GUID &guid, WORD maj, WORD min)
 {
-	ASSERT (fullname != NULL);
-	return (m_loadedlibs.find (fullname) != NULL);
+	TypeLibUniqueID uid(guid, maj, min);
+	TypeLib *plib = NULL;
+	Tcl_HashEntry *pEntry = NULL;
+	m_loadedlibs.find(&uid, &pEntry);
+	if (pEntry)
+		plib = (TypeLib*)Tcl_GetHashValue (pEntry);
+	return plib;
 }
+
+
+char * TypeLibsTbl::GetFullName (char * szProgName)
+{
+	ASSERT (szProgName != NULL);
+	TypeLib * pLib = NULL;
+	char * result = NULL;
+	if (find(szProgName, &pLib) != end()) {
+		ASSERT (pLib != NULL);
+		result = pLib->m_fullname;
+	}
+	return result;
+}
+
+
+
+GUID * TypeLibsTbl::GetGUID (char * szProgName)
+{
+	ASSERT (szProgName != NULL);
+	TypeLib * pLib = NULL;
+	GUID * result = NULL;
+	if (find(szProgName, &pLib) != end()) {
+		ASSERT (pLib != NULL && pLib->m_libattr != NULL);
+		result = &(pLib->m_libattr->guid);
+	}
+	return result;
+}
+
 
 /*
  *-------------------------------------------------------------------------
  * TypeLibsTbl::UnloadLib --
- *	Given the fullname of a library, the routine unloads it, if it is 
+ *	Given the programmatic name of a library, the routine unloads it, if it is 
  *	loaded.
  *
  * Result:
@@ -223,22 +271,73 @@ bool TypeLibsTbl::IsLibLoaded (const char *fullname)
  *	None.
  *-------------------------------------------------------------------------
  */
-void TypeLibsTbl::UnloadLib (Tcl_Interp *pInterp, const char *fullname)
+void TypeLibsTbl::UnloadLib (Tcl_Interp *pInterp, const char *szprogname)
 {
 	Tcl_HashEntry *pEntry = NULL;
 	TypeLib *ptl  = NULL;
+	pEntry = g_libs.find(szprogname, &ptl);
 
-	if (!m_loadedlibs.find (fullname, &pEntry)) 
+	if (pEntry == NULL) 
 		return;
 
-	ASSERT (pEntry != NULL);
-	ptl = (TypeLib*)Tcl_GetHashValue (pEntry);
-	ASSERT (ptl != NULL);
+	ASSERT (ptl != NULL && ptl->m_ptl != NULL);
+
+	TObjPtr progname, fullname;
+	HRESULT hr = GenerateNames(progname, fullname, ptl->m_ptl);
+
+	if (FAILED(hr)) {
+		Tcl_SetResult (pInterp, HRESULT2Str(hr), TCL_DYNAMIC);
+		return;
+	}
+	ASSERT (fullname != (Tcl_Obj*)(NULL));
+	TypeLibUniqueID uid (ptl->m_libattr->guid, ptl->m_libattr->wMajorVerNum, ptl->m_libattr->wMinorVerNum);
+	m_loadedlibs.delete_entry(&(uid));
 	delete ptl;
-	m_loadedlibs.delete_entry(fullname);
 	Tcl_DeleteHashEntry (pEntry);
 }
 
+/*
+ *-------------------------------------------------------------------------
+ * TypeLibsTbl::GenerateNames --
+ *	Given a type library, generates the programmatic and full name for the
+ *	library.
+ *
+ * Result:
+ *	S_OK iff successful.
+ *
+ * Side Effects:
+ *	The objects, progname and username allocate memory to store the 
+ *	names.
+ *-------------------------------------------------------------------------
+ */
+HRESULT TypeLibsTbl::GenerateNames (TObjPtr &progname, TObjPtr &username, ITypeLib *pLib)
+{
+	USES_CONVERSION;
+	ASSERT (pLib != NULL);
+	CComBSTR bprogname, busername;
+	HRESULT hr;
+	hr = pLib->GetDocumentation(-1, &bprogname, &busername, NULL, NULL);
+	if (FAILED(hr)) return hr;
+
+	TLIBATTR * pattr = NULL;
+	hr = pLib->GetLibAttr (&pattr);
+	if (FAILED(hr)) return hr;
+
+	ASSERT (pattr != NULL);
+	TDString str;
+	if (busername != NULL)
+		str << OLE2A(busername);
+	else
+		str << OLE2A(bprogname);
+	str << " (Ver " << pattr->wMajorVerNum << "." << pattr->wMinorVerNum << ")";
+	pLib->ReleaseTLibAttr(pattr);
+
+	username.create();
+	username = str;
+	progname.create();
+	progname = OLE2A(bprogname);
+	return hr;
+}
 
 
 
@@ -256,42 +355,7 @@ void TypeLibsTbl::UnloadLib (Tcl_Interp *pInterp, const char *fullname)
  */
 TypeLib *TypeLibsTbl::EnsureCached (ITypeLib  *ptl)
 {
-	USES_CONVERSION;
-
-	ASSERT (ptl != NULL);
-	TDString verfullname;
-	TypeLib *pLib = NULL;
-	TLIBATTR *pattr = NULL;
-	HRESULT hr;
-	BSTR name = NULL, 
-		 fullname = NULL;
-	char *szname, *szfullname;
-	Tcl_HashEntry *pEntry = NULL;
-	CComPtr<ITypeComp> ptc;
-
-	// get the libraries different names
-	hr = ptl->GetDocumentation(-1, &name, &fullname, NULL, NULL);
-	CHECKHR(hr);
-	szname = W2A(name);
-	szfullname = W2A(fullname);
-	FreeBSTR(name);
-	FreeBSTR(fullname);
-	if (find(szname, &pLib))
-		return pLib; // cached already
-
-	// build the fullname+version string
-	hr = ptl->GetLibAttr(&pattr);
-	CHECKHR(hr);
-	verfullname.set (szfullname) << " (Ver " << short(pattr->wMajorVerNum) << "." << 
-		short(pattr->wMinorVerNum) << ")";
-	ptl->ReleaseTLibAttr (pattr); pattr = NULL;
-
-	// get the compiler interface
-	hr = ptl->GetTypeComp (&ptc);
-	CHECKHR(hr);
-	// now cache the lot
-	pLib = Cache (szname, verfullname, ptl, ptc);
-	return pLib;
+	return Cache(NULL, ptl);
 }
 
 
@@ -314,7 +378,7 @@ TypeLib *TypeLibsTbl::EnsureCached (ITypeInfo *pInfo)
 	UINT tmp;
 	HRESULT hr;
 	hr = pInfo->GetContainingTypeLib(&pLib, &tmp);
-	CHECKHR(hr);
+	if (FAILED(hr)) return NULL;
 	return EnsureCached (pLib);
 }
 
@@ -329,13 +393,17 @@ int TypeLib_Init (Tcl_Interp *pInterp)
 {
 	OleInitialize(NULL);
 	Tcl_CreateExitHandler (TypeLib_Exit, NULL);
-	Tcl_CreateObjCommand (pInterp, "typelib::loaded", TypeLib_LoadedLibs, NULL, NULL);
-	Tcl_CreateObjCommand (pInterp, "typelib::load", TypeLib_LoadLib, NULL, NULL);
+	Tcl_CreateObjCommand (pInterp, "typelib::loadedlibs", TypeLib_LoadedLibs, NULL, NULL);
+	Tcl_CreateObjCommand (pInterp, "typelib::_load", TypeLib_LoadLib, NULL, NULL);
 	Tcl_CreateObjCommand (pInterp, "typelib::unload", TypeLib_UnloadLib, NULL, NULL);
 	Tcl_CreateObjCommand (pInterp, "typelib::types", TypeLib_TypesInLib, NULL, NULL);
 	Tcl_CreateObjCommand (pInterp, "typelib::typeinfo", TypeLib_TypeInfo, NULL, NULL);
 	Tcl_CreateObjCommand (pInterp, "typelib::isloaded", TypeLib_IsLibLoaded, NULL, NULL);
+	Tcl_CreateObjCommand (pInterp, "typelib::reglib_path", TypeLib_GetRegLibPath, NULL, NULL);
+	Tcl_CreateObjCommand (pInterp, "typelib::loadedlib_path", TypeLib_GetLoadedLibPath, NULL, NULL);
+	Tcl_CreateObjCommand (pInterp, "typelib::loadedlib_details", TypeLib_GetDetails, NULL, NULL);
 
+	
 	//// TESTS ////
 	Tcl_CreateObjCommand (pInterp, "typelib::resolveconst", TypeLib_ResolveConstantTest, NULL, NULL);
 	
@@ -599,6 +667,8 @@ void	TypeLib_GetName (ITypeLib *pLib, ITypeInfo *pInfo, TObjPtr &pname)
 		bLibcreate = true;
 	}
 	// get the library programmatic name
+
+	
 	hr = pLib->GetDocumentation (-1, &progname, NULL, NULL, NULL);
 	CHECKHR(hr);
 
@@ -1203,10 +1273,30 @@ int TypeLib_DescribeTypeInfo (Tcl_Interp *pInterp, ITypeInfo *pti)
 			default:
 				presult = "???"; break;
 			}
+
 			
 			presult.lappend(methods).lappend(properties).lappend(inherited);
-			cmdresult = TCL_OK;
+
+			
+			if (SUCCEEDED(pti->GetDocumentation (MEMBERID_NIL, NULL, &bdoc, NULL, NULL)) && bdoc != NULL)
+			{
+				presult.lappend (OLE2A(bdoc));
+				SysFreeString (bdoc);
+			}
+			else
+				presult.lappend ("");
+
+			LPOLESTR lpsz;
+			CHECKHR(StringFromCLSID (pta->guid, &lpsz));
+			ASSERT (lpsz != NULL);
+			if (lpsz != NULL) {
+				presult.lappend(OLE2A (lpsz));
+				CoTaskMemFree (lpsz); lpsz = NULL;
+			}
 		}
+		Tcl_SetObjResult (pInterp, presult);
+		cmdresult = TCL_OK;
+
 		ReleaseTypeAttr (pti, pta);
 	}
 	catch (HRESULT hr) {
@@ -1216,18 +1306,6 @@ int TypeLib_DescribeTypeInfo (Tcl_Interp *pInterp, ITypeInfo *pti)
 	catch (char *error) {
 		ReleaseTypeAttr (pti, pta);
 		throw (error);
-	}
-
-	if (cmdresult == TCL_OK) {
-		if (SUCCEEDED(pti->GetDocumentation (MEMBERID_NIL, NULL, &bdoc, NULL, NULL)) && bdoc != NULL)
-		{
-			presult.lappend (OLE2A(bdoc));
-			SysFreeString (bdoc);
-		}
-		else
-			presult.lappend ("");
-
-		Tcl_SetObjResult (pInterp, presult);
 	}
 
 	return cmdresult;
@@ -1522,7 +1600,7 @@ TCL_CMDEF(TypeLib_LoadedLibs)
  *-------------------------------------------------------------------------
  * TypeLib_LoadLib --
  *	Ensures that a given library is loaded. A library is described in terms
- *	of its full human-readable name.
+ *	of its filename.
  *
  * Result:
  *	TCL_OK iff successful.
@@ -1534,14 +1612,16 @@ TCL_CMDEF(TypeLib_LoadedLibs)
 TCL_CMDEF(TypeLib_LoadLib)
 {
 	if (objc != 2) {
-		Tcl_WrongNumArgs (pInterp, 1, objv, "full_libname");
+		Tcl_WrongNumArgs (pInterp, 1, objv, "library_path");
 		return TCL_ERROR;
 	}
 	TObjPtr libname;
 	libname.attach(objv[1], false);
-	if (g_libs.LoadLib (pInterp, libname) != NULL)
+	TypeLib * pLib = g_libs.LoadLib (pInterp, libname);
+	if (pLib) {
+		Tcl_SetResult (pInterp, pLib->m_progname, TCL_VOLATILE);
 		return TCL_OK;
-	else
+	} else
 		return TCL_ERROR;
 }
 
@@ -1585,16 +1665,34 @@ TCL_CMDEF(TypeLib_UnloadLib)
  */
 TCL_CMDEF(TypeLib_IsLibLoaded)
 {
-	if (objc != 2) {
-		Tcl_WrongNumArgs (pInterp, 1, objv, "fullname_library");
+	USES_CONVERSION;
+	if (objc != 4) {
+		Tcl_WrongNumArgs (pInterp, 1, objv, "lib_guid majorver minorver");
 		return TCL_ERROR;
 	}
-	TObjPtr name;
-	TObjPtr value;
-	value.create(false);
-	name.attach(objv[1]);
-	value = g_libs.IsLibLoaded(name);
-	Tcl_SetObjResult (pInterp, value);
+	GUID guid;
+	long maj, min;
+
+	char * szguid = Tcl_GetStringFromObj (objv[1], NULL);
+	ASSERT (szguid != NULL);
+	if (FAILED(CLSIDFromString(A2OLE(szguid), &guid))) {
+		Tcl_SetResult (pInterp, "string isn't a guid", TCL_STATIC);
+		return TCL_ERROR;
+	}
+	
+	if (Tcl_GetLongFromObj(pInterp, objv[2], &maj) == TCL_ERROR)
+		return TCL_ERROR;
+
+	if (Tcl_GetLongFromObj(pInterp, objv[3], &min) == TCL_ERROR)
+		return TCL_ERROR;
+
+	TypeLib * pLib = NULL;
+
+	pLib = g_libs.TypeLibFromUID(guid, maj, min);
+	Tcl_ResetResult (pInterp);
+	if (pLib) 
+		Tcl_SetObjResult(pInterp, pLib->m_progname);
+	
 	return TCL_OK;
 }
 
@@ -1687,7 +1785,62 @@ TCL_CMDEF (TypeLib_TypesInLib)
 
 
 
+HRESULT TypeLib_GetDefaultInterface (ITypeInfo *pti, bool bEventSource, ITypeInfo ** ppdefti) {
+	ASSERT (pti != NULL && ppdefti != NULL);
 
+	OptclTypeAttr attr;
+	attr = pti;
+	ASSERT (attr.m_pattr != NULL);
+	if (attr->typekind != TKIND_COCLASS)
+		return E_FAIL;
+	HRESULT hr;
+	WORD selected = -1;
+
+	for (WORD index = 0; index < attr->cImplTypes; index++) {
+
+		INT implflags;
+		hr = pti->GetImplTypeFlags(index, &implflags);
+		if (FAILED(hr)) return hr;
+		
+		if ( ((implflags & IMPLTYPEFLAG_FDEFAULT) == IMPLTYPEFLAG_FDEFAULT) &&
+			 ((bEventSource && (implflags & IMPLTYPEFLAG_FSOURCE) == IMPLTYPEFLAG_FSOURCE) ||
+			 (!bEventSource && (implflags & IMPLTYPEFLAG_FSOURCE) != (IMPLTYPEFLAG_FSOURCE)))
+		   ) {
+			break;
+		}
+	}
+	if (index == attr->cImplTypes)
+		return E_FAIL;
+
+	CComPtr<ITypeInfo> pimpl;
+	HREFTYPE hreftype;
+
+	// retrieve the referenced typeinfo
+	hr = pti->GetRefTypeOfImplType(index, &hreftype);
+	if (FAILED(hr)) return hr;
+
+	hr = pti->GetRefTypeInfo(hreftype, &pimpl);
+	if (FAILED(hr)) return hr;
+	OptclTypeAttr pimplattr;
+	pimplattr = pimpl;
+
+	// resolve typedefs 
+	while (pimplattr->typekind == TKIND_ALIAS) {
+		CComPtr<ITypeInfo> pref;
+		hr = pimpl->GetRefTypeInfo(pimplattr->tdescAlias.hreftype, &pref);
+		if (FAILED(hr)) return hr;
+		pimpl = pref;
+		pimplattr = pimpl;
+	}
+
+	// if this isn't an interface forget it
+	if ((pimplattr->typekind != TKIND_DISPATCH) &&
+		(pimplattr->typekind != TKIND_INTERFACE))
+		return E_FAIL;
+
+	// okay - return the typeinfo to the caller
+	return pimpl.CopyTo(ppdefti);
+}
 
 
 
@@ -1747,6 +1900,102 @@ TCL_CMDEF(TypeLib_TypeInfo)
 }
 
 
+
+
+
+
+
+TCL_CMDEF(TypeLib_GetRegLibPath)
+{
+	USES_CONVERSION;
+	if (objc != 4) {
+		Tcl_WrongNumArgs (pInterp, 1, objv, "lib_id majver minver");
+		return TCL_ERROR;
+	}
+
+	char * szGuid = Tcl_GetStringFromObj (objv[1], NULL);
+	long maj, min;
+
+	if (Tcl_GetLongFromObj(pInterp, objv[2], &maj) == TCL_ERROR)
+		return TCL_ERROR;
+
+	if (Tcl_GetLongFromObj(pInterp, objv[3], &min) == TCL_ERROR)
+		return TCL_ERROR;
+
+	GUID guid;
+	if (FAILED(CLSIDFromString(A2OLE(szGuid), &guid))) {
+		Tcl_SetResult (pInterp, "failed to convert to a guid: ", TCL_STATIC);
+		Tcl_AppendResult (pInterp, szGuid, NULL);
+		return TCL_ERROR;
+	}
+
+	CComBSTR path;
+	HRESULT hr = QueryPathOfRegTypeLib(guid, maj, min, LOCALE_SYSTEM_DEFAULT, &path);
+	if (FAILED(hr)) {
+		Tcl_SetResult (pInterp, HRESULT2Str(hr), TCL_DYNAMIC);
+		return TCL_ERROR;
+	}
+	Tcl_SetResult (pInterp, W2A(path), TCL_VOLATILE);
+	return TCL_OK;
+}
+
+TCL_CMDEF(TypeLib_GetLoadedLibPath)
+{
+	if (objc != 2) {
+		Tcl_WrongNumArgs (pInterp, 1, objv, "progname");
+		return TCL_ERROR;
+	}
+	char * szProgName = Tcl_GetStringFromObj(objv[1], NULL);
+	ASSERT (szProgName);
+
+	TypeLib * plib = NULL;
+	g_libs.find(szProgName, &plib);
+	if (plib==NULL) {
+		Tcl_SetResult (pInterp, "couldn't find loaded library: ", TCL_STATIC);
+		Tcl_AppendResult (pInterp, szProgName, NULL);
+		return TCL_ERROR;
+	}
+	Tcl_SetObjResult (pInterp, plib->m_path);
+	return TCL_OK;
+}
+
+
+TCL_CMDEF(TypeLib_GetDetails)
+{
+	USES_CONVERSION;
+	if (objc != 2) {
+		Tcl_WrongNumArgs (pInterp, 1, objv, "progname");
+		return TCL_ERROR;
+	}
+	char * szProgName = Tcl_GetStringFromObj (objv[1], NULL);
+	ASSERT(szProgName);
+	TypeLib * plib = NULL;
+	g_libs.find(szProgName, &plib);
+	if (plib == NULL) {
+		Tcl_SetResult (pInterp, "couldn't find loaded library: ", TCL_STATIC);
+		Tcl_AppendResult (pInterp, szProgName, NULL);
+		return TCL_ERROR;
+	}
+	TObjPtr obj;
+	obj.create();
+	LPOLESTR pstr;
+	HRESULT hr;
+	hr = StringFromCLSID(plib->m_libattr->guid, &pstr);
+	if (FAILED(hr)) {
+		Tcl_SetResult (pInterp, HRESULT2Str(hr), TCL_DYNAMIC);
+		return TCL_ERROR;
+	}
+	obj.lappend(OLE2A(pstr));
+	CoTaskMemFree(pstr);
+	obj.lappend(plib->m_libattr->wMajorVerNum);
+	obj.lappend(plib->m_libattr->wMinorVerNum);
+	obj.lappend(plib->m_path);
+	obj.lappend(plib->m_fullname);
+	Tcl_SetObjResult (pInterp, obj);
+	return TCL_OK;
+}
+
+
 /*
  *-------------------------------------------------------------------------
  * TypeLib_ResolveName --
@@ -1761,6 +2010,7 @@ TCL_CMDEF(TypeLib_TypeInfo)
  *
  *-------------------------------------------------------------------------
  */
+
 void TypeLib_ResolveName (const char * lib, const char * type, 
 						  TypeLib **pptl, ITypeInfo **ppinfo)
 {
@@ -1884,7 +2134,7 @@ bool TypeLib_ResolveConstant (Tcl_Interp *pInterp, ITypeInfo *pti,
 		ASSERT (bp.lpvardesc->lpvarValue != NULL);
 		if (bp.lpvardesc->lpvarValue == NULL)
 			throw ("constant didn't have a associated value!");
-		var2obj (pInterp, *(bp.lpvardesc->lpvarValue), pObj);
+		var2obj (pInterp, *(bp.lpvardesc->lpvarValue), NULL, pObj);
 		pti->ReleaseVarDesc (bp.lpvardesc);
 		return true;
 	}
@@ -2005,4 +2255,5 @@ TCL_CMDEF(TypeLib_ResolveConstantTest)
 	} else
 		return TCL_ERROR;
 }
+
 

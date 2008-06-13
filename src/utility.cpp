@@ -31,6 +31,10 @@
 #include "typelib.h"
 #include "optclobj.h"
 #include "optcltypeattr.h"
+#include "optclbindptr.h"
+#include "comrecordinfoimpl.h"
+#include <stack>
+
 
 #ifdef _DEBUG
 /*
@@ -62,6 +66,35 @@ void OptclTrace(LPCTSTR lpszFormat, ...)
 }
 #endif //_DEBUG
 
+
+
+template <class T>
+class TCoMem {
+public:
+	TCoMem () : p(NULL) {}
+	~TCoMem () {
+		Free();
+	}
+	
+	void Free () {
+		if (p) {
+			CoTaskMemFree(p);
+			p = NULL;
+		}
+	}
+
+	T* Alloc (ULONG size) {
+		Free();
+		p = (T*)(CoTaskMemAlloc (size));
+		return p;
+	}
+
+	operator T* () {
+		return p;
+	}
+protected:
+	T * p;
+};
 
 /*
  *-------------------------------------------------------------------------
@@ -317,7 +350,7 @@ void OptclVariantClear (VARIANT *pvar)
 
 
 
-bool var2obj_byref (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &presult, OptclObj **ppObj)
+bool var2obj_byref (Tcl_Interp *pInterp, VARIANT &var, ITypeInfo *pti, TObjPtr &presult, OptclObj **ppObj)
 {
 	ASSERT (var.ppunkVal != NULL);
 
@@ -327,7 +360,7 @@ bool var2obj_byref (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &presult, OptclOb
 	BSTR		bstr = NULL;
 	HRESULT		hr = S_OK;
 	OptclObj *	pObj = NULL;
-
+	ULONG		size = 0;
 
 	presult.create();
 	if (var.ppunkVal == NULL) {
@@ -340,7 +373,7 @@ bool var2obj_byref (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &presult, OptclOb
 		case VT_DISPATCH:
 		case VT_UNKNOWN:
 			if (*var.ppunkVal != NULL) {
-				pObj = g_objmap.Add (pInterp, *var.ppunkVal);
+				pObj = g_objmap.Add (pInterp, *var.ppunkVal, pti);
 				presult = (const char*)(*pObj); // cast to char*
 				if (ppObj != NULL)
 					*ppObj = pObj;
@@ -385,8 +418,11 @@ bool var2obj_byref (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &presult, OptclOb
 				Tcl_SetResult (pInterp, "pointer to null", TCL_STATIC);
 				bOk = false;
 			} else {
-				bOk = var2obj (pInterp, *var.pvarVal, presult, ppObj);
+				bOk = var2obj (pInterp, *var.pvarVal, NULL, presult, ppObj);
 			}
+			break;
+		case VT_RECORD:
+			return record2obj(pInterp, var, presult);
 			break;
 		default:
 			presult = "?unhandledtype?";
@@ -406,6 +442,125 @@ bool var2obj_byref (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &presult, OptclOb
 
 /*
  *-------------------------------------------------------------------------
+ * record2obj
+ *	Converts a VT_RECORD variant to a Tcl object
+ * Result:
+ *	true iff successful
+ * Side Effects:
+ *	Can create new optcl objects, which without reference counting might 
+ *	become a nightmare! :-(
+ *-------------------------------------------------------------------------
+ */
+bool record2obj (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &result)
+{
+	USES_CONVERSION;
+	ASSERT (var.vt == VT_RECORD && var.pRecInfo != NULL);
+
+	ULONG fields = 0, index;
+	TCoMem<BSTR> fieldnames;
+	bool bok = true;
+	
+
+	IRecordInfo *prinfo = var.pRecInfo;
+	CComPtr<ITypeInfo> pinf;
+	
+	try {
+		CHECKHR(prinfo->GetTypeInfo(&pinf));
+		CHECKHR(prinfo->GetFieldNames (&fields, NULL));
+		if (fieldnames.Alloc (fields) == NULL)
+			throw "failed to allocate memory.";
+		CHECKHR(prinfo->GetFieldNames (&fields, fieldnames));
+		
+		for (index = 0; bok && index < fields; index++) {
+			CComVariant	varValue;
+			TObjPtr		value;
+			CHECKHR(prinfo->GetField(var.pvRecord, fieldnames[index], &varValue));
+			result.lappend(OLE2A(fieldnames[index]));
+			bok = var2obj (pInterp, varValue, pinf, value, NULL);
+			if (bok)
+				result.lappend(value);
+		}
+		
+	} catch (HRESULT hr) {
+		Tcl_SetResult (pInterp, HRESULT2Str(hr), TCL_DYNAMIC);
+		bok = false;
+	} catch (_com_error ce) {
+		Tcl_SetResult (pInterp, T2A((TCHAR*)ce.ErrorMessage()), TCL_VOLATILE);
+		bok = false;
+	} catch (char *err) {
+		Tcl_SetResult (pInterp, err, TCL_VOLATILE);
+		bok = false;
+	} catch (...) {
+		Tcl_SetResult (pInterp, "An unexpected error type occurred", TCL_STATIC);
+		bok = false;
+	}
+
+	if (fieldnames != NULL) {
+		for (index = 0; index < fields; index++)
+			SysFreeString(fieldnames[index]);
+	}
+	return bok;
+}
+
+
+
+
+bool vararray2obj (Tcl_Interp * pInterp, VARIANT &var, ITypeInfo * pti, TObjPtr &presult) 
+{
+	bool bOk = false;
+	LONG lbound, ubound;
+	VARTYPE vt = var.vt & (~VT_ARRAY); // type of elements array
+
+	presult.create();
+
+	if (var.parray == NULL) {
+		Tcl_SetResult (pInterp, "invalid pointer to COM safe array", TCL_STATIC);
+		return false;
+	}
+
+
+	ULONG	dims = SafeArrayGetDim (var.parray), // total number of dimensions
+			dindex; // dimension iterator
+	auto_array<LONG> lbounds(dims), ubounds(dims);
+	
+	// get the lower and upper bounds of each dimension
+	for (dindex = 0; dindex < dims; dindex++) {
+		CHECKHR_TCL(SafeArrayGetLBound(var.parray, dindex, lbounds+dindex), pInterp, false);
+		CHECKHR_TCL(SafeArrayGetUBound(var.parray, dindex, ubounds+dindex), pInterp, false);
+	}
+
+	
+
+	CHECKHR_TCL(SafeArrayGetLBound(var.parray, 0, &lbound), pInterp, false);
+	CHECKHR_TCL(SafeArrayGetUBound(var.parray, 0, &ubound), pInterp, false);
+
+	for (LONG index = lbound; index <= ubound; index++) {
+		CComVariant varElement;
+		varElement.vt = vt;
+
+		// WARNING: The following code is *not* solid, as it doesn't handle record structures at all!!
+		// in order to do this, I'll have to take into account the type info associate with this
+		// array ... not now I guess.
+		if (vt == VT_VARIANT) {
+			CHECKHR_TCL(SafeArrayGetElement(var.parray, &index, &varElement), pInterp, false);
+		} else {
+			CHECKHR_TCL(SafeArrayGetElement(var.parray, &index, &(varElement.punkVal)), pInterp, false);
+		}
+		TObjPtr element;
+		// now that we've got the variant, convert it to a tcl object
+		if (!var2obj (pInterp, varElement, pti, element))
+			return false;
+		// append it to the result
+		presult += element;
+	}
+	
+	return bOk;
+}
+
+
+
+/*
+ *-------------------------------------------------------------------------
  * var2obj --
  *	Converts a variant to a Tcl_Obj without type information.
  * Result:
@@ -414,7 +569,7 @@ bool var2obj_byref (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &presult, OptclOb
  *	None.
  *-------------------------------------------------------------------------
  */
-bool var2obj (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &presult, OptclObj **ppObj /* = NULL*/)
+bool var2obj (Tcl_Interp *pInterp, VARIANT &var, ITypeInfo *pti, TObjPtr &presult, OptclObj **ppObj /* = NULL*/)
 {
 	USES_CONVERSION;
 
@@ -430,17 +585,16 @@ bool var2obj (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &presult, OptclObj **pp
 	
 
 	if ((var.vt & VT_ARRAY) || (var.vt & VT_VECTOR)) {
-		Tcl_SetResult (pInterp, "can't handle arrays or vectors for now", TCL_STATIC);
-		return false;
+		return vararray2obj (pInterp, var, pti, presult);
 	}
 
 	if (var.vt == VT_VARIANT) {
 		ASSERT (var.pvarVal != NULL);
-		return var2obj (pInterp, *(var.pvarVal), presult, ppObj);
+		return var2obj (pInterp, *(var.pvarVal), pti, presult, ppObj);
 	}
 
 	if (var.vt & VT_BYREF)
-		return var2obj_byref (pInterp, var, presult, ppObj);
+		return var2obj_byref (pInterp, var, pti, presult, ppObj);
 
 	presult.create();
 
@@ -454,6 +608,10 @@ bool var2obj (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &presult, OptclObj **pp
 				presult = (const char*)(*pObj); // cast to char*
 				if (ppObj != NULL)
 					*ppObj = pObj;
+				if (pti != NULL) {
+					g_libs.EnsureCached (pti);
+					pObj->SetInterfaceFromType(pti);
+				}
 			}
 			else
 				presult = 0;
@@ -472,6 +630,9 @@ bool var2obj (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &presult, OptclObj **pp
 			break;
 		case VT_R8:
 			presult = (double)(var.dblVal);
+			break;
+		case VT_RECORD:
+			return record2obj (pInterp, var, presult);
 			break;
 		default: // standard string conversion required
 			comvar = var;
@@ -507,6 +668,7 @@ bool var2obj (Tcl_Interp *pInterp, VARIANT &var, TObjPtr &presult, OptclObj **pp
  *
  * Result:
  *	true iff successful, else interpreter holds error string.
+ *
  * Side effects:
  *	None.
  *-------------------------------------------------------------------------
@@ -519,7 +681,6 @@ bool obj2var_ti (Tcl_Interp *pInterp, TObjPtr &obj, VARIANT &var,
 	ASSERT (pInterp != NULL);
 
 	OptclTypeAttr		ota;
-	CComPtr<ITypeInfo>	pcurrent;
 	CComPtr<IUnknown>	ptmpunk;
 	HRESULT				hr;
 	TObjPtr				ptmp;
@@ -527,115 +688,110 @@ bool obj2var_ti (Tcl_Interp *pInterp, TObjPtr &obj, VARIANT &var,
 	OptclObj *			pOptclObj = NULL;
 	long				lValue;
 
+	// if we have no value, set the variant to an empty
+	if (obj.isnull ()) {
+			VariantClear(&var);
+			return true;
+	}
+
 	// if no type description has been provided, do a simple conversion
 	if (pdesc == NULL) {
 		obj2var (obj, var);
 		bOk = true;
 	}
 
-	// a simple type
-	else if (pdesc->vt != VT_USERDEFINED && pdesc->vt != VT_SAFEARRAY) {
-		if (pdesc->vt != VT_PTR) 
-			return obj2var_vt (pInterp, obj, var, pdesc->vt);
-		else {
-			ASSERT (pdesc->lptdesc->vt != VT_PTR &&
-					pdesc->lptdesc->vt != VT_USERDEFINED &&
-					pdesc->lptdesc->vt != VT_SAFEARRAY);
-
-			if     (pdesc->lptdesc->vt == VT_PTR || 
-					pdesc->lptdesc->vt == VT_USERDEFINED || 
-					pdesc->lptdesc->vt == VT_SAFEARRAY)
-			{
-				Tcl_SetResult (pInterp, "can't convert - optcl doesn't support level of de-referencing", TCL_STATIC);
-				return false;
-			}	
-			return obj2var_vt_byref (pInterp, obj, var, pdesc->lptdesc->vt);
-		}
-	}
-
-	// arrays - should be easy to do - not enough time right now...
 	else if (pdesc->vt == VT_SAFEARRAY) {
 		// wont do arrays for now.
 		Tcl_SetResult (pInterp, "optcl doesn't currently handle array types", TCL_STATIC);
 	}
 
-	else {
+	else if (pdesc->vt == VT_USERDEFINED) {
 		// type information provided and it refers to a user defined type
 		// resolve the initial type
+		CComPtr<ITypeInfo> refinfo;
+		CHECKHR(pInfo->GetRefTypeInfo (pdesc->hreftype, &refinfo));
 
-		hr = pInfo->GetRefTypeInfo (pdesc->hreftype, &ota.m_pti);
-		CHECKHR(hr);
-		g_libs.EnsureCached (ota.m_pti);
-		hr = ota.GetTypeAttr();
-		CHECKHR(hr);
+		if (!TypeInfoResolveAliasing (pInterp, refinfo, &ota.m_pti))
+			return false;
+		CHECKHR(ota.GetTypeAttr());
 		ASSERT (ota.m_pattr != NULL);
-		pcurrent = pInfo;
 
-		while (ota->typekind == TKIND_ALIAS && 
-			   ota->tdescAlias.vt == VT_USERDEFINED)
-		{
-			HREFTYPE href = ota->tdescAlias.hreftype;
-			pcurrent = ota.m_pti;
-			ota = NULL; // release the type attribute and type info 
-			pcurrent->GetRefTypeInfo (href, &ota.m_pti);
-			hr = ota.GetTypeAttr();
-			CHECKHR(hr);
-		}
-		
+
 		// we've now climbed back up the alias chain and have one of the following:
 		// enum, record, module, interface, dispatch, coclass, union or alias to a basic type
-		// The following we can't (currently) do anything useful with: record, union, module.
 
-		if (ota.m_pattr->typekind == TKIND_ALIAS) 
-			return obj2var_ti (pInterp, obj, var, pcurrent, &(ota->tdescAlias));
+		if (ota.m_pattr->typekind == TKIND_ALIAS &&
+			ota->tdescAlias.vt != VT_USERDEFINED) 
+			return obj2var_ti (pInterp, obj, var, ota.m_pti, &(ota->tdescAlias));
 
 
 		TYPEKIND tk = ota->typekind;	// the metaclass
 		GUID intfguid = ota->guid;	
-
 
 		switch (tk)
 		{
 		case TKIND_ENUM:
 			if (bOk = (Tcl_GetLongFromObj (NULL, obj, &lValue) == TCL_OK)) 
 				obj2var(obj, var);
-			else if (bOk = TypeLib_ResolveConstant (pInterp, obj, ptmp, ota.m_pti)) 
+			else if (bOk = TypeLib_ResolveConstant(pInterp, obj, ptmp, ota.m_pti)) 
 				obj2var (ptmp, var);
 			break;
 		
 		case TKIND_DISPATCH:
 		case TKIND_INTERFACE:
 			// both these case require an object with the correct interface
-			pOptclObj = g_objmap.Find (obj);
-			if (pOptclObj != NULL) {
-				ptmpunk = (IUnknown*)(*pOptclObj);
-				ASSERT (ptmpunk != NULL);
-				hr = ptmpunk->QueryInterface (intfguid, (void**)&(var.punkVal));
-				CHECKHR(hr);
-				V_VT(&var) = VT_UNKNOWN;
+			V_VT(&var) = VT_UNKNOWN;
+			V_UNKNOWN(&var) = NULL;
+
+			// let's first check for the 'special' cases.
+
+			// images:
+			// check to see if we have tk installed and we're requested a picture
+			if (g_bTkInit && IsEqualGUID (ota.m_pattr->guid, __uuidof(IPicture))) {
+				// create picture variant
+				bOk = obj2picture(pInterp, obj, var);
+			} else if (((char*)obj)[0] != 0) {
+				pOptclObj = g_objmap.Find (obj);
+				if (pOptclObj != NULL) {
+					ptmpunk = (IUnknown*)(*pOptclObj);
+					ASSERT (ptmpunk != NULL);
+					hr = ptmpunk->QueryInterface (intfguid, (void**)&(var.punkVal));
+					CHECKHR(hr);
+					bOk = true;
+				} else {
+					ObjectNotFound (pInterp, obj);
+				}
+			} else
 				bOk = true;
-			} else 
-				ObjectNotFound (pInterp, obj);
 			break;
 
 		case TKIND_COCLASS:
-			pOptclObj = g_objmap.Find (obj);
-			if (pOptclObj != NULL) {
-				var.punkVal = (IUnknown*)(*pOptclObj);
-				var.punkVal->AddRef();
-				V_VT(&var) = VT_UNKNOWN;
-				bOk = true;
+			V_VT(&var) = VT_UNKNOWN;
+			V_UNKNOWN(&var) = NULL;
+	
+			if (obj.isnotnull() && ((char*)obj)[0] != 0) {
+				pOptclObj = g_objmap.Find (obj);
+				if (pOptclObj != NULL) {
+					var.punkVal = (IUnknown*)(*pOptclObj);
+					var.punkVal->AddRef();
+					
+					bOk = true;
+				} else 
+					ObjectNotFound (pInterp, obj);
 			} else 
-				ObjectNotFound (pInterp, obj);
+				bOk = true;
 			break;
 
-		case TKIND_ALIAS: 
 			ASSERT (FALSE); // should be hanlded above.
 			break;
 
 		// can't handle these types
 		case TKIND_MODULE:
+			break;
+		case TKIND_ALIAS: 
 		case TKIND_RECORD:
+			return obj2record(pInterp, obj, var, ota.m_pti);
+			break;
 		case TKIND_UNION:
 			obj2var (obj, var);
 			bOk = true;
@@ -646,13 +802,196 @@ bool obj2var_ti (Tcl_Interp *pInterp, TObjPtr &obj, VARIANT &var,
 		}
 	}
 
+	else if (pdesc->vt == VT_PTR) {
+		ASSERT (pdesc->lptdesc != NULL);
+		if (pdesc->lptdesc->vt == VT_USERDEFINED)
+			return obj2var_ti (pInterp, obj, var, pInfo, pdesc->lptdesc);
+
+		ASSERT (pdesc->lptdesc->vt != VT_USERDEFINED);
+		return obj2var_vt_byref (pInterp, obj, var, pdesc->lptdesc->vt);
+	}
+
+	// a simple type
+	else {
+		ASSERT (pdesc->vt != VT_ARRAY && pdesc->vt != VT_PTR && pdesc->vt != VT_USERDEFINED);
+		return obj2var_vt (pInterp, obj, var, pdesc->vt);
+	}
+
+	// arrays - should be easy to do - not enough time right now...
+
+
 	return bOk;
 }
 
 
+/*
+ *-------------------------------------------------------------------------
+ * TypeInfoResolveAliasing
+ *	Resolves a type info to its base referenced type.
+ *
+ * Result:
+ *	true iff successful.
+ *
+ * Side Effects:
+ *	The pointer referenced by pti is updated to point to the base type.	
+ *-------------------------------------------------------------------------
+ */
+bool TypeInfoResolveAliasing (Tcl_Interp *pInterp, ITypeInfo * pti, ITypeInfo ** presolved) {
+	ASSERT (pInterp != NULL && pti != NULL && presolved != NULL);
+
+	bool result = false;
+	CComPtr<ITypeInfo>	currentinfo = pti, temp;
+	OptclTypeAttr pta;
+	try {
+		pta = currentinfo;
+		while (pta->typekind == TKIND_ALIAS && pta->tdescAlias.vt == VT_USERDEFINED) {
+			CHECKHR(currentinfo->GetRefTypeInfo (pta->tdescAlias.hreftype, &temp));
+			currentinfo = temp;
+			temp.Release();
+			pta = currentinfo;
+			g_libs.EnsureCached (currentinfo);
+		}
+		
+		CHECKHR(currentinfo.CopyTo(presolved));
+		result = true;
+	} catch (char *er) {
+		Tcl_SetResult (pInterp, er, TCL_VOLATILE);
+	} catch (HRESULT hr) {
+		Tcl_SetResult (pInterp, HRESULT2Str(hr), TCL_DYNAMIC);
+	} catch (...) {
+		Tcl_SetResult (pInterp, "unknown error in obj2record", TCL_STATIC);
+	}
+	return result;
+}
+
+/*
+ *-------------------------------------------------------------------------
+ * obj2record
+ *	
+ * Result:
+ *	
+ * Side Effects:
+ *	
+ *-------------------------------------------------------------------------
+ */
+bool obj2record (Tcl_Interp *pInterp, TObjPtr &obj, PVOID precord, ITypeInfo *pinf)
+{
+	USES_CONVERSION;
+	HRESULT hr;
+	try{
+		CComPtr<IRecordInfo> prinf;
+		CHECKHR(GetRecordInfoFromTypeInfo2(pinf, &prinf));
+
+		CComPtr<ITypeComp> pcmp;
+		CHECKHR(pinf->GetTypeComp (&pcmp));
+
+		int length = obj.llength ();
+		if ((length % 2) != 0) 
+			throw ("record definition must have name value pairs");
+
+		// iterate over the list of name value pairs
+		for (int i = 0; (i+1) < length; i += 2) {
+			OptclBindPtr obp;
+
+			char * name = obj.lindex (i);
+			LPOLESTR lpoleName = A2OLE(name);
+			TObjPtr ptr = obj.lindex (i+1);
+			CComVariant vValue;
+
+			// retrieve the vardesc for this item:
+			hr = pcmp->Bind (lpoleName, 0, INVOKE_PROPERTYPUT | INVOKE_PROPERTYPUTREF | INVOKE_PROPERTYGET, &obp.m_pti, &obp.m_dk, &obp.m_bp);
+			if (obp.m_dk == DESCKIND_NONE) {
+				Tcl_SetResult (pInterp, "record doesn't have member called: ", TCL_STATIC);
+				Tcl_AppendResult (pInterp, name, NULL);
+				return false;
+			}
+			CHECKHR(hr);
+						
+			ASSERT (obp.m_dk == DESCKIND_VARDESC);
+
+			if (obp.m_bp.lpvardesc->elemdescVar.tdesc.vt == VT_USERDEFINED) {
+				CComPtr<ITypeInfo> inforef, inforesolved;
+				CHECKHR(pinf->GetRefTypeInfo (obp.m_bp.lpvardesc->elemdescVar.tdesc.hreftype, &inforef));
+				if (!TypeInfoResolveAliasing (pInterp, inforef, &inforesolved))
+					return false;
+				OptclTypeAttr pta;
+				pta = inforesolved;
+				if (pta->typekind == TKIND_RECORD) {
+					VARIANT var;
+					CComPtr<ITypeInfo> peti;
+					VariantInit(&var);
+					PVOID pfield = NULL;
+					HRESULT hr = prinf->GetFieldNoCopy (precord, lpoleName, &var, &pfield);
+					ASSERT (var.vt & VT_RECORD);
+					CHECKHR(var.pRecInfo->GetTypeInfo (&peti));
+					if (!obj2record (pInterp, ptr, var.pvRecord, peti))
+						return false;
+				} else {
+					if (!obj2var_ti(pInterp, ptr, vValue, obp.m_pti, &(obp.m_bp.lpvardesc->elemdescVar.tdesc)))
+						return false;
+					CHECKHR(prinf->PutField (INVOKE_PROPERTYPUT, precord, lpoleName, &vValue));
+				}
+			} else {
+				if (!obj2var_ti(pInterp, ptr, vValue, obp.m_pti, &(obp.m_bp.lpvardesc->elemdescVar.tdesc)))
+					return false;
+				CHECKHR(prinf->PutField (INVOKE_PROPERTYPUT, precord, lpoleName, &vValue));
+			}
+		}
+		return true;
+	} catch (char *er) {
+		Tcl_SetResult (pInterp, er, TCL_VOLATILE);
+	} catch (HRESULT hr) {
+		Tcl_SetResult (pInterp, HRESULT2Str(hr), TCL_DYNAMIC);
+	} catch (...) {
+		Tcl_SetResult (pInterp, "unknown error in obj2record", TCL_STATIC);
+	}
+	return false;
+
+}
 
 
+/*
+ *-------------------------------------------------------------------------
+ * obj2record
+ *	Converts a Tcl object to a record structure declared by a provided
+ *	type info.
+ * Result:
+ *	true iff successful.
+ * Side Effects:
+ *	None.
+ *-------------------------------------------------------------------------
+ */
+bool obj2record (Tcl_Interp *pInterp, TObjPtr& obj, VARIANT&var, ITypeInfo *pinf) {
+	ASSERT(pInterp != NULL && pinf != NULL);
+	USES_CONVERSION;
+	CComBSTR name;
+	try {
+		CComPtr<ITypeInfo> precinfo;
+		OptclTypeAttr pta;
+		pta = pinf;
+		//ASSERT (pta->typekind == TKIND_RECORD);
+		
+		CComPtr<IRecordInfo> prinf;
+		CHECKHR(GetRecordInfoFromTypeInfo2(pinf, &prinf));
 
+		CComPtr<ITypeComp> pcmp;
+		CHECKHR(pinf->GetTypeComp (&pcmp));
+
+		VariantClear(&var);
+		var.pvRecord = prinf->RecordCreate ();
+		var.vt = VT_RECORD;
+		CHECKHR(prinf.CopyTo (&(var.pRecInfo)));
+		prinf->RecordInit (var.pvRecord);
+		return obj2record (pInterp, obj, var.pvRecord, pinf);
+	} catch (char *er) {
+		Tcl_SetResult (pInterp, er, TCL_VOLATILE);
+	} catch (HRESULT hr) {
+		Tcl_SetResult (pInterp, HRESULT2Str(hr), TCL_DYNAMIC);
+	} catch (...) {
+		Tcl_SetResult (pInterp, "unknown error in obj2record", TCL_STATIC);
+	}
+	return false;
+}
 
 
 /*
@@ -853,15 +1192,22 @@ bool	obj2var_vt (Tcl_Interp *pInterp, TObjPtr &obj, VARIANT &var, VARTYPE vt)
 	IUnknown * ptmpunk = NULL;
 	bool bOk = true;
 	HRESULT hr;
+	OptclObj *pObj = g_objmap.Find (obj);
+	if (pObj != NULL) {
+		if (pObj->m_pta->typekind == TKIND_DISPATCH || (pObj->m_pta->wTypeFlags & TYPEFLAG_FDUAL))
+			vt = VT_DISPATCH;
+		else
+			vt = VT_UNKNOWN;
+	}
 
 	switch (vt)
 	{
 	case VT_DISPATCH:
 	case VT_UNKNOWN:
 		V_VT(&var) = vt;
-		if (obj.isnull()) 
-			var.punkVal = NULL;
-		else {
+		V_UNKNOWN(&var) = NULL;
+
+		if (obj.isnotnull() && ( ((char*)obj)[0] != 0) ) {
 			// attempt to cast from an optcl object
 			pOptclObj = g_objmap.Find (obj);
 			
@@ -995,7 +1341,7 @@ bool SplitBrackets (Tcl_Interp *pInterp, Tcl_Obj *pObj,
 	if (Tcl_EvalObj (pInterp, pcmd) == TCL_ERROR)
 		return false;
 
-	CONST84 char * okstr = Tcl_GetStringResult (pInterp);
+	const char * okstr = Tcl_GetStringResult (pInterp);
 	if (okstr[0] == '0') {
 		Tcl_SetResult (pInterp, "property format is incorrect: ", TCL_STATIC);
 		Tcl_AppendResult (pInterp, Tcl_GetStringFromObj(pObj, NULL), NULL);
@@ -1014,6 +1360,25 @@ bool SplitBrackets (Tcl_Interp *pInterp, Tcl_Obj *pObj,
 		Tcl_ListObjReplace (NULL, result, result.llength() - 1, 1, 0, NULL);
 	return true;
 }
+
+
+
+/*
+ *-------------------------------------------------------------------------
+ * obj2picture
+ *	Convert the name of a tk image to an com object supporting IPicture
+ *
+ * Result:
+ *	True iff successful. Else, error description in Tcl interpreter.
+ *
+ * Side Effects:
+ *	None.	
+ *-------------------------------------------------------------------------
+ */
+bool obj2picture(Tcl_Interp *pInterp, TObjPtr &obj, VARIANT &var) {
+	return false; // NOT IMPLEMENTED YET
+}
+
 
 /// Tests
 TCL_CMDEF (Obj2VarTest)

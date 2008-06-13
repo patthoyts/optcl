@@ -32,6 +32,7 @@
 // forward declarations of used classes
 #include "container.h"
 #include <string>
+#include "optcltypeattr.h"
 
 class ObjMap;
 class EventBindings;
@@ -51,7 +52,7 @@ public:
 	virtual ~OptclObj ();
 
 	bool	Create (Tcl_Interp *pInterp, const char *strid, const char *windowpath, bool start);
-	bool	Attach (Tcl_Interp *pInterp, LPUNKNOWN punk);
+	bool	Attach (Tcl_Interp *pInterp, LPUNKNOWN punk, ITypeInfo *pti = NULL);
 
 	operator LPUNKNOWN();
 	operator const char * ();
@@ -59,11 +60,12 @@ public:
 	void	CoClassName (TObjPtr &pObj);
 	void	InterfaceName (TObjPtr &pObj);
 	void	SetInterfaceName (TObjPtr &pObj);
+	HRESULT SetInterfaceFromType (ITypeInfo *pinfo);
 
 	bool	InvokeCmd (Tcl_Interp *pInterp, int objc, Tcl_Obj *CONST objv[]);
 
-	bool	OptclObj::ResolvePropertyObject (Tcl_Interp *pInterp, const char *sname, 
-								   IDispatch **ppdisp, ITypeInfo **ppinfo, ITypeComp **ppcmp);
+	bool	ResolvePropertyObject (Tcl_Interp *pInterp, const char *sname, 
+								   IUnknown **ppunk, ITypeInfo **ppinfo, ITypeComp **ppcmp);
 
 	bool	GetBinding (Tcl_Interp *pInterp, char *name);
 	bool	SetBinding (Tcl_Interp *pInterp, char *name, Tcl_Obj *command);
@@ -79,7 +81,6 @@ protected:	// methods
 	void	InitialisePointers (LPUNKNOWN punk, ITypeLib *pLib = NULL, ITypeInfo *pinfo = NULL);
 	void	CreateCommand();
 	HRESULT InitialisePointersFromCoClass ();
-	HRESULT SetInterfaceFromType (ITypeInfo *pinfo);
 	HRESULT	GetTypeAttr();
 	void	ReleaseTypeAttr();
 	void	ReleaseBindingTable();
@@ -98,18 +99,19 @@ protected:	// methods
 
 	bool	InvokeWithTypeInfVariant (Tcl_Interp *pInterp, long invokekind,
 								  int objc, Tcl_Obj *CONST objv[], 
-								  IDispatch *pDisp, ITypeInfo *pti, ITypeComp *pCmp, VARIANT &varResult);
+								  IUnknown *pUnk, ITypeInfo *pti, ITypeComp *pCmp, 
+								  VARIANT &varResult, ITypeInfo **ppResultInfo = NULL);
 	bool	InvokeWithTypeInf (Tcl_Interp *pInterp, long ik, int objc, Tcl_Obj *CONST objv[], 
-							   IDispatch *pDisp, ITypeInfo *pti, ITypeComp *pcmp);
+							   IUnknown *pUnk, ITypeInfo *pti, ITypeComp *pcmp);
 
 	bool	CheckInterface (Tcl_Interp *pInterp);
 
 	bool	SetProp (Tcl_Interp *pInterp, int paircount, Tcl_Obj * CONST namevalues[], 
-					 IDispatch *pdisp, ITypeInfo *pti, ITypeComp *ptc);
+					 IUnknown *punk, ITypeInfo *pti, ITypeComp *ptc);
 
-	bool	GetProp (Tcl_Interp *pInterp, Tcl_Obj *name, IDispatch *pDisp, ITypeInfo *pti, ITypeComp *ptc);
+	bool	GetProp (Tcl_Interp *pInterp, Tcl_Obj *name, IUnknown *punk, ITypeInfo *pti, ITypeComp *ptc);
 	bool	GetIndexedVariant (Tcl_Interp *pInterp, Tcl_Obj *name, 
-			  IDispatch *pdisp, ITypeInfo *pti, ITypeComp *ptc, VARIANT &varResult);
+			  IUnknown *punk, ITypeInfo *pti, ITypeComp *ptc, VARIANT &varResult, ITypeInfo **ppResultInfo);
 
 	bool	GetPropVariantDispatch (Tcl_Interp *pInterp, const char*name, 
 									IDispatch * pcurrent, VARIANT &varResult);
@@ -121,14 +123,15 @@ protected:	// methods
 
 	void	ContainerWantsToDie ();
 protected:	// properties
-	CComQIPtr<IDispatch>	m_pcurrent;	// Current interface
+	CComPtr<IUnknown>		m_pcurrent;	// Current interface
 	CComPtr<IUnknown>		m_punk;		// the 'true' IUnknown; reference purposes only
 	CComPtr<ITypeLib>		m_ptl;		// the type library for this object
 	CComPtr<ITypeInfo>		m_pti;		// the type interface for the current interface
 	CComPtr<ITypeComp>		m_ptc;		// the type info's compiler interface
 	CComPtr<ITypeInfo>		m_pti_class;// the type interface for the this coclass
-	TYPEATTR	*			m_pta;		// the type attribute for the current typeinfo
-
+public:
+	OptclTypeAttr 			m_pta;		// the type attribute for the current typeinfo
+protected:
 	std::string				m_name;
 	unsigned long			m_refcount;	// reference count of this optcl object
 	Tcl_Interp		*		m_pInterp;	// interpreter that created this object

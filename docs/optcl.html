@@ -3,7 +3,7 @@
 <head>
 <meta http-equiv="Content-Type"
 content="text/html; charset=iso-8859-1">
-<meta name="GENERATOR" content="Microsoft FrontPage Express 2.0">
+<meta name="GENERATOR" content="Microsoft FrontPage 4.0">
 <title>OpTcl Documentation</title>
 </head>
 
@@ -18,12 +18,8 @@ Pezeshkpour</a></p>
 
 <p align="center">August 1999</p>
 
-<p>This software is freely distributed under the GNU Public
-Licence. I've include this in this distribution as an HTML file.</p>
-
-<p>Gosh! So much to document here, and so little time. This is a
-preliminary, and rather informal document - a better version is
-on its way!</p>
+<p>This software is freely distributed under the GNU Lesser General Public License. I've include this in this distribution as an
+<a href="../GNU_LGPL.html"> HTML file</a>.</p>
 
 <h1>The Distribution</h1>
 
@@ -33,9 +29,11 @@ the distribution:</p>
 <table border="0" cellpadding="4" cellspacing="4">
     <tr>
         <td><strong>install</strong></td>
-        <td>Holds the installer script and two versions of the
-        DLL - one for Tcl 8.0.5 (no stubs), and one with stubs
-        enabled, built for Tcl 8.2 libraries.</td>
+        <td>Holds the installer script and the debug and release versions of the
+          stubbed DLLs for Tcl8.2 and above. I also wanted to build a
+          distribution for Tcl8.0.5+ without stubs, but no matter were I
+          downloaded the Tcl installer from, it failed half way through the
+          installation.</td>
     </tr>
     <tr>
         <td><strong>docs</strong></td>
@@ -49,7 +47,8 @@ the distribution:</p>
     <tr>
         <td><strong>tests</strong></td>
         <td>A couple of test scripts using MS Word, and the
-        Calendar Control.</td>
+        Calendar Control. Need to put an example of scripting DirectX - should
+          nicely show off what OpTcl can really do! :-)</td>
     </tr>
 </table>
 
@@ -69,15 +68,14 @@ is applied to that directory.</p>
     <li>Distribute example files.</li>
     <li>Implement array parameters.</li>
     <li>Implement default parameter values.</li>
-    <li>Test <em>out</em>-flagged parameters (I haven't found a
-        server to do this, yet).</li>
     <li>Implement <em>in/out</em>-flagged parameters for events.</li>
     <li>Use Type Libraries on the type conversion of an event-handlers
         result.</li>
     <li>Test with DCOM. (does anyone have a setup that can do
         this?)</li>
     <li>Write an ActiveScripting engine interface.</li>
-    <li>In some cases perhaps, reconsider syntax.</li>
+    <li>Remove explicit reference counting - I can't do this until Scriptics
+      patch the Tcl core to enable 'precious' objects.</li>
 </ul>
 
 <h1>Known Bugs/Limitations</h1>
@@ -87,6 +85,8 @@ is applied to that directory.</p>
     <li>Can't set parameters by their name, à la Visual Basic.</li>
     <li>Microsoft Forms ActiveX objects can't be fully in-place
         activated.</li>
+    <li>Lack of reference counting means that objects within records need to be
+      explicitly unlocked.</li>
 </ul>
 
 <h1>Credits</h1>

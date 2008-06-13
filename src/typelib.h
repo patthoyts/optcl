@@ -34,13 +34,54 @@
 struct TypeLib {
 	CComPtr<ITypeLib>	m_ptl; 
 	CComPtr<ITypeComp>	m_ptc;
+	TLIBATTR	*		m_libattr;
 
-	TypeLib (ITypeLib *ptl, ITypeComp *ptc) {
+	TObjPtr				m_progname, m_fullname, m_path;
+
+
+	TypeLib () {
+		m_progname.create();
+		m_fullname.create();
+		m_path.create();
+		m_libattr = NULL;
+	}
+
+	~TypeLib () {
+		if (m_libattr != NULL) {
+			ASSERT (m_ptl != NULL);
+			m_ptl->ReleaseTLibAttr(m_libattr);
+		}	
+	}
+
+	HRESULT Init (ITypeLib *ptl, ITypeComp *ptc, const char * progname, 
+				  const char * fullname, const char * path) {
+		ASSERT (progname != NULL && fullname != NULL);
+
 		m_ptl = ptl;
 		m_ptc = ptc;
+
+		m_progname = progname;
+		m_fullname = fullname;
+		if (path)
+			m_path = path;
+		else
+			m_path = "???";
+		return ptl->GetLibAttr(&m_libattr);
 	}
 };
 
+
+struct TypeLibUniqueID {
+	TypeLibUniqueID (const GUID & guid, WORD maj, WORD min) {
+		m_guid = guid;
+		m_majorver = maj;
+		m_minorver = min;
+	}
+
+	GUID	m_guid;
+	WORD	m_majorver;
+	WORD	m_minorver;
+};
 
 
 // TypeLibsTbl - a hash table mapping library programmatic name to a TypeLib structure
@@ -51,18 +92,27 @@ class TypeLibsTbl : public THash<char, TypeLib*>
 public:
 				TypeLibsTbl ();
 	virtual		~TypeLibsTbl ();
+
 	void		DeleteAll ();
-	ITypeLib*	LoadLib (Tcl_Interp *pInterp, const char *fullname);
-	void		UnloadLib (Tcl_Interp *pInterp, const char *fullname);
-	bool		IsLibLoaded (const char *fullname);
+
+	TypeLib*	LoadLib (Tcl_Interp *pInterp, const char * fullpath);
+	void		UnloadLib (Tcl_Interp *pInterp, const char * progname);
+	TypeLib*	TypeLibFromUID (const GUID & guid, WORD maj, WORD min);
+
 	TypeLib*	EnsureCached (ITypeLib  *pLib);
 	TypeLib*	EnsureCached (ITypeInfo *pInfo);
+
+	char*		GetFullName (char * szProgName);
+	GUID*		GetGUID (char * szProgName);
+
 protected: // methods
-	TypeLib*	Cache (const char *szname, const char *szfullname, ITypeLib *ptl, ITypeComp *ptc);
+	TypeLib*	Cache (Tcl_Interp * pInterp, ITypeLib *ptl, const char * path = NULL);
+	HRESULT		GenerateNames (TObjPtr &progname, TObjPtr &username, ITypeLib *pLib);
 
 protected: // properties
-	THash <char, Tcl_HashEntry*>	m_loadedlibs; // by name
+	THash <TypeLibUniqueID, Tcl_HashEntry*>		m_loadedlibs;	// by unique and full descriptor
 };
+
 
 // globals
 extern TypeLibsTbl g_libs;
@@ -76,6 +126,6 @@ bool	TypeLib_ResolveConstant (Tcl_Interp *pInterp, char *fullformatname,
 								 TObjPtr &pObj, ITypeInfo *pInfo = NULL);
 bool	TypeLib_ResolveConstant (Tcl_Interp *pInterp, ITypeInfo *pti, 
 								 const char *member, TObjPtr &pObj);
-
+HRESULT TypeLib_GetDefaultInterface (ITypeInfo *pti, bool bEventSource, ITypeInfo ** ppdefti);
 
 #endif // _TYPELIB_H_62518A80_624A_11d4_8004_0040055861F2

@@ -40,7 +40,7 @@
 //////////////////////////////////////////////////////////////////////
 
 OptclObj::OptclObj ()
-: m_refcount(0), m_cmdtoken(NULL), m_pta(NULL),
+: m_refcount(0), m_cmdtoken(NULL),
 m_destroypending(false), m_container(this)
 {
 }
@@ -67,7 +67,7 @@ bool OptclObj::Create (Tcl_Interp *pInterp, const char *strid,
 		if (!start)
 			hr = GetActiveObject(clsid, NULL, &m_punk);		
 		if (start || FAILED(hr)) 
-			hr = CoCreateInstance (clsid, NULL, CLSCTX_SERVER, IID_IUnknown, (void**)&m_punk);
+			hr = m_punk.CoCreateInstance (clsid, NULL, CLSCTX_SERVER);
 		CHECKHR_TCL(hr, pInterp, false);
 		
 	}
@@ -100,17 +100,23 @@ bool OptclObj::Create (Tcl_Interp *pInterp, const char *strid,
  *	None.
  *-------------------------------------------------------------------------
  */
-bool OptclObj::Attach (Tcl_Interp *pInterp, LPUNKNOWN punk)
+bool OptclObj::Attach (Tcl_Interp *pInterp, LPUNKNOWN punk, ITypeInfo *pti)
 {
 	ASSERT (m_punk == NULL);
 	ASSERT (punk != NULL);
 
 	m_pInterp = pInterp;
 	try {
+		CComPtr<ITypeLib> ptl;
+		if (pti) {
+			UINT index;
+			CHECKHR(pti->GetContainingTypeLib (&ptl, &index));
+		}
+
 		CreateName (punk);
 		InitialiseUnknown(punk);
 		InitialiseClassInfo(m_punk);
-		InitialisePointers (m_punk);
+		InitialisePointers (m_punk, ptl, pti);
 	}
 	catch (HRESULT hr) {
 		m_punk = NULL;
@@ -300,9 +306,9 @@ HRESULT OptclObj::InitialisePointersFromCoClass()
  */
 HRESULT OptclObj::GetTypeAttr()
 {
-	ASSERT (m_pta == NULL);
 	ASSERT (m_pti != NULL);
-	return m_pti->GetTypeAttr(&m_pta);
+	m_pta = m_pti;
+	return (m_pta.m_pattr == NULL)?E_FAIL:S_OK;
 }
 
 
@@ -318,10 +324,7 @@ HRESULT OptclObj::GetTypeAttr()
  */
 void OptclObj::ReleaseTypeAttr()
 {
-	if (m_pti != NULL && m_pta != NULL) {
-		m_pti->ReleaseTypeAttr(m_pta);
-		m_pta = NULL;
-	}
+	m_pta.ReleaseTypeAttr();
 }
 
 
@@ -343,35 +346,51 @@ HRESULT OptclObj::SetInterfaceFromType (ITypeInfo *reftype)
 	HRESULT hr;
 	CComPtr<ITypeLib> reftypelib;
 	UINT libindex;
-	TYPEATTR *pta;
+	
+	OptclTypeAttr pta;
+	CComPtr<ITypeInfo> pRT = reftype;
 
-	hr = reftype->GetContainingTypeLib(&reftypelib, &libindex);
+	if (reftype == NULL)
+		return E_POINTER;
+
+	hr = pRT->GetContainingTypeLib(&reftypelib, &libindex);
 	if (FAILED(hr))
 		return hr;
 
-	hr = reftype->GetTypeAttr (&pta);
-	if (FAILED(hr))
-		return hr;
+	pta = pRT;
+	
+	if (pta.m_pattr == NULL)
+		return E_FAIL;
 
+	if (pta->typekind == TKIND_COCLASS) {
+		CComPtr<ITypeInfo> definterface;
+		hr = TypeLib_GetDefaultInterface(pRT, false, &definterface);
+		if (FAILED(hr)) return hr;
+		pRT = definterface;
+		pta = pRT;
+		if (pta.m_pattr == NULL)
+			return E_FAIL;
+	}
+
+	/*
 	if (pta->typekind != TKIND_DISPATCH) {
 		reftype->ReleaseTypeAttr (pta);
 		return E_NOINTERFACE;
 	}
+	*/
 
 	GUID guid = pta->guid;
-	reftype->ReleaseTypeAttr (pta);
-	
+	m_pcurrent.Release();
 	hr = m_punk->QueryInterface(guid, (void**)(&m_pcurrent));
 	if (FAILED(hr))
 		return hr;
 
-	
 	// nice! now we cache the result of all our hard work
-	ReleaseTypeAttr ();
-	m_pti = reftype;
+	m_pti = pRT;
 	m_ptl = reftypelib;
 	m_ptc = NULL;
 	m_pti->GetTypeComp (&m_ptc);
+
 	// now that we got the interface ok, retrieve the type attributes again
 	return GetTypeAttr();
 }
@@ -396,12 +415,12 @@ void OptclObj::InitialisePointers (LPUNKNOWN punk, ITypeLib *plib, ITypeInfo *pi
 {
 	HRESULT hr;
 	ASSERT (punk != NULL);
-	CComQIPtr<IDispatch> pdisp;
 
 	ASSERT ((plib!=NULL && pinfo!=NULL) || (plib==NULL && pinfo==NULL));
+	ReleaseTypeAttr();
 
 	if (plib != NULL && pinfo != NULL) {
-		m_pcurrent = punk;
+		//m_pcurrent = punk;
 		m_ptl = plib;
 		m_pti = pinfo;
 		m_ptc = NULL;
@@ -409,17 +428,13 @@ void OptclObj::InitialisePointers (LPUNKNOWN punk, ITypeLib *plib, ITypeInfo *pi
 		GetTypeAttr();
 	} 
 
-	// else, if we have the coclass information, try building on its default
-	// interface
+	// else, if we don't have coclass information, or we can't initialise
+	// from it, try building on its default ...
 	else if (m_pti_class == NULL || FAILED(InitialisePointersFromCoClass())) {
-		// failed to build using coclass information
-		// Query Interface cast to a dispatch interface
-		m_pcurrent = punk;
 		try {
-			if (m_pcurrent == NULL)
-				throw (HRESULT(0));
+			CHECKHR(punk->QueryInterface (IID_IDispatch, reinterpret_cast<void**>(&m_pcurrent)));
 			// get the type information and library.
-			hr = m_pcurrent->GetTypeInfo (0, LOCALE_SYSTEM_DEFAULT, &m_pti);
+			hr = (reinterpret_cast<IDispatch*>(m_pcurrent.p))->GetTypeInfo (0, LOCALE_SYSTEM_DEFAULT, &m_pti);
 			CHECKHR(hr);
 			UINT index;
 			hr = m_pti->GetContainingTypeLib(&m_ptl, &index);
@@ -427,10 +442,7 @@ void OptclObj::InitialisePointers (LPUNKNOWN punk, ITypeLib *plib, ITypeInfo *pi
 			m_ptc = NULL;
 			m_pti->GetTypeComp (&m_ptc);
 			GetTypeAttr();
-		}
-		
-
-		catch (HRESULT) {
+		} catch (HRESULT) {
 			// there isn't a interface that we can use
 			ReleaseTypeAttr();
 			m_pcurrent.Release();
@@ -438,8 +450,9 @@ void OptclObj::InitialisePointers (LPUNKNOWN punk, ITypeLib *plib, ITypeInfo *pi
 			m_ptl = NULL;
 			m_ptc = NULL;
 			return;
-		}
+		}		
 	}
+
 	// inform the typelibrary browser system of the library
 	g_libs.EnsureCached (m_ptl);
 }
@@ -549,26 +562,11 @@ void OptclObj::SetInterfaceName (TObjPtr &pObj)
 	TypeLib *ptl;
 	CComPtr<ITypeInfo> pti;
 	CComPtr<IUnknown> punk;
-	TYPEATTR ta, *pta = NULL;
-	HRESULT hr;
 
+	// throws an hresult
 	TypeLib_ResolveName (pObj, &ptl, &pti);
 	// we need to insert some alias type resolution here.
-
-	hr = pti->GetTypeAttr (&pta);
-	CHECKHR(hr);
-	ta = *pta;
-	pti->ReleaseTypeAttr (pta);
-
-
-	if (ta.typekind != TKIND_INTERFACE &&
-		ta.typekind != TKIND_DISPATCH)
-		throw ("type does not resolve to an interface");
-
-	
-	hr = m_punk->QueryInterface (ta.guid, (void**)(&punk));
-	CHECKHR(hr);
-	InitialisePointers (punk, ptl->m_ptl, pti);
+	CHECKHR(SetInterfaceFromType(pti));
 }
 
 
@@ -593,12 +591,12 @@ void OptclObj::SetInterfaceName (TObjPtr &pObj)
 bool OptclObj::InvokeCmd (Tcl_Interp *pInterp, int objc, Tcl_Obj *CONST objv[])
 {
 	ASSERT (pInterp != NULL);
-	CComPtr<IDispatch> pdisp;
+	CComPtr<IUnknown> punk;
 	CComPtr<ITypeComp> ptc;
 	CComPtr<ITypeInfo> pti;
 	TObjPtr name;
 	
-	int		invkind = DISPATCH_METHOD;
+	int		invkind = DISPATCH_PROPERTYGET | DISPATCH_METHOD;
 
 	char * msg = 			
 		"\n\tobj : ?-with subprop? prop ?value? ?prop value? ..."
@@ -625,13 +623,13 @@ bool OptclObj::InvokeCmd (Tcl_Interp *pInterp, int objc, Tcl_Obj *CONST objv[])
 		}
 
 		name.attach(objv[1]);
-		if (!ResolvePropertyObject (pInterp, name, &pdisp, &pti, &ptc))
+		if (!ResolvePropertyObject (pInterp, name, &punk, &pti, &ptc))
 			return false;
 		objc -= 2;
 		objv += 2;
 	}
 	else {
-		pdisp = m_pcurrent;
+		punk = m_pcurrent;
 		ptc = m_ptc;
 		pti = m_pti;
 	}
@@ -645,20 +643,20 @@ bool OptclObj::InvokeCmd (Tcl_Interp *pInterp, int objc, Tcl_Obj *CONST objv[])
 		objv++;
 
 		if (objc == 1) 
-			return GetProp (pInterp, objv[0], pdisp, pti, ptc);
+			return GetProp (pInterp, objv[0], punk, pti, ptc);
 		else {
 			if (objc % 2 != 0) {
 				Tcl_SetResult (pInterp, "property set requires pairs of parameters", TCL_STATIC);
 				return false;
 			}
-			return SetProp (pInterp, objc/2, objv, pdisp, pti, ptc);
+			return SetProp (pInterp, objc/2, objv, punk, pti, ptc);
 		}
 	}
 
 	if (ptc == NULL)
-		return InvokeNoTypeInf (pInterp, invkind, objc, objv, pdisp);
+		return InvokeNoTypeInf (pInterp, invkind, objc, objv, reinterpret_cast<IDispatch*>(punk.p));
 	else
-		return InvokeWithTypeInf (pInterp, invkind, objc, objv, pdisp, pti, ptc);
+		return InvokeWithTypeInf (pInterp, invkind, objc, objv, punk, pti, ptc);
 }
 
 
@@ -680,19 +678,8 @@ bool OptclObj::CheckInterface (Tcl_Interp *pInterp)
 	if (m_pcurrent == NULL) {
 		Tcl_SetResult (pInterp, "no interface available", TCL_STATIC);
 		return false;
-	}
-
-	/* -- not needed now that we are only working with dispatch interfaces
-
-	if (m_pta != NULL) {
-		if (m_pta->typekind == TKIND_INTERFACE && ((m_pta->wTypeFlags&TYPEFLAG_FDUAL)==0))
-		{
-			Tcl_SetResult (pInterp, "interface is a pure vtable - optcl can't call these ... yet!", TCL_STATIC);
-			return false;
-		}
-	}
-	*/
-	return true;
+	} else
+		return true;
 }
 
 
@@ -704,6 +691,7 @@ bool OptclObj::CheckInterface (Tcl_Interp *pInterp)
  *
  * Result:
  *	true iff successful - else error string in interpreter.
+ *
  * Side effects:
  *	None.
  *-------------------------------------------------------------------------
@@ -741,8 +729,6 @@ bool OptclObj::BuildParamsWithBindPtr (Tcl_Interp *pInterp, int objc, Tcl_Obj *C
 				// is it [inout]?
 				if (pdesc->paramdesc.wParamFlags  & PARAMFLAG_FOUT) {
 					obj.attach(Tcl_ObjGetVar2 (pInterp, objv[count], NULL, TCL_LEAVE_ERR_MSG));
-					if (obj.isnull()) 
-						return false;
 				}
 				else // just [in]
 					obj.attach(objv[count]);
@@ -800,9 +786,8 @@ bool OptclObj::RetrieveOutParams (Tcl_Interp *pInterp, int objc, Tcl_Obj *CONST 
 		if (pdesc->paramdesc.wParamFlags & PARAMFLAG_FOUT)
 		{
 			// convert the value back to a tcl object
-			bok = (!var2obj (pInterp, dp[objc - count - 1], presult) ||
-					Tcl_ObjSetVar2 (pInterp, objv[count], NULL, 
-					                presult, TCL_LEAVE_ERR_MSG) == NULL);
+			bok = var2obj (pInterp, dp[objc - count - 1], NULL, presult) &&
+				  (Tcl_ObjSetVar2 (pInterp, objv[count], NULL, presult, TCL_LEAVE_ERR_MSG) != NULL);
 				
 		}
 	}
@@ -816,7 +801,8 @@ bool OptclObj::RetrieveOutParams (Tcl_Interp *pInterp, int objc, Tcl_Obj *CONST 
 
 bool OptclObj::InvokeWithTypeInfVariant (Tcl_Interp *pInterp, long invokekind,
 								  int objc, Tcl_Obj *CONST objv[], 
-								  IDispatch *pDisp, ITypeInfo *pti, ITypeComp *pCmp, VARIANT &varResult)
+								  IUnknown *pUnk, ITypeInfo *pti, ITypeComp *pCmp, 
+								  VARIANT &varResult, ITypeInfo **ppResultInfo)
 {
 	USES_CONVERSION;
 	DispParams	dp;
@@ -834,19 +820,21 @@ bool OptclObj::InvokeWithTypeInfVariant (Tcl_Interp *pInterp, long invokekind,
 	static  DISPID		propput = DISPID_PROPERTYPUT;
 	OptclBindPtr	obp;
 	OptclTypeAttr	ota;
+    unsigned short wFlags = invokekind;
 
 	ASSERT (objc >= 1);
-	ASSERT (pDisp != NULL);
+	ASSERT (pUnk != NULL);
 	ASSERT (pti != NULL);
 	ASSERT (varResult.vt == VT_EMPTY);
 	ota = pti;
 
-	ASSERT (ota->typekind == TKIND_DISPATCH || (ota->wTypeFlags & TYPEFLAG_FDUAL));
+	//ASSERT (ota->typekind == TKIND_DISPATCH || (ota->wTypeFlags & TYPEFLAG_FDUAL));
 
 	try {
 		olename = A2OLE(Tcl_GetStringFromObj (objv[0], NULL));
-		hr = pCmp->Bind (olename, LHashValOfName(LOCALE_SYSTEM_DEFAULT, olename), 
-			invokekind, &obp.m_pti, &obp.m_dk, &obp.m_bp);
+        if (invokekind == DISPATCH_PROPERTYPUT)
+            wFlags |= DISPATCH_PROPERTYPUTREF;
+		hr = pCmp->Bind (olename, 0, wFlags, &obp.m_pti, &obp.m_dk, &obp.m_bp);
 		CHECKHR(hr);
 
 		if (obp.m_dk == DESCKIND_NONE) {
@@ -866,10 +854,30 @@ bool OptclObj::InvokeWithTypeInfVariant (Tcl_Interp *pInterp, long invokekind,
 				dp.rgdispidNamedArgs = &propput;
 			}
 
-			// can't invoke through the typelibrary for local objects
-			//hr = pti->Invoke(pDisp, dispid, invokekind, &dp, &varResult, &ei, &ea);
-			hr = pDisp->Invoke(dispid, IID_NULL, LOCALE_SYSTEM_DEFAULT, invokekind, 
-				&dp, &varResult, &ei, &ea);
+            if (invokekind == DISPATCH_PROPERTYPUT
+                && (dp[0].vt == VT_UNKNOWN  || dp[0].vt == VT_DISPATCH || (dp[0].vt & VT_ARRAY) || (dp[0].vt & VT_BYREF)))
+            {
+                // Try first PUTREF then plain PUT as authors often forget to provide a putref version when they should.
+                invokekind = DISPATCH_PROPERTYPUTREF;
+                hr = E_FAIL;
+                while (FAILED(hr) && invokekind != DISPATCH_PROPERTYGET)
+                {
+			        if (m_pta->typekind == TKIND_DISPATCH || (m_pta->wTypeFlags & TYPEFLAG_FDUAL))
+				        hr = reinterpret_cast<IDispatch*>(pUnk)->Invoke(dispid, IID_NULL, LOCALE_SYSTEM_DEFAULT, invokekind, &dp, &varResult, &ei, &ea);
+			        else
+				        hr = DispInvoke (pUnk, pti, dispid, invokekind, &dp, &varResult, &ei, &ea);
+                    invokekind >>= 1;
+                }
+                invokekind = DISPATCH_PROPERTYPUT;
+            }
+			else
+            {
+			    if (m_pta->typekind == TKIND_DISPATCH || (m_pta->wTypeFlags & TYPEFLAG_FDUAL))
+				    hr = reinterpret_cast<IDispatch*>(pUnk)->Invoke(dispid, IID_NULL, LOCALE_SYSTEM_DEFAULT, invokekind, &dp, &varResult, &ei, &ea);
+			    else
+				    hr = DispInvoke (pUnk, pti, dispid, invokekind, &dp, &varResult, &ei, &ea);
+            }
+				
 
 			if (invokekind == DISPATCH_PROPERTYPUT) {
 				dp.rgdispidNamedArgs = NULL;
@@ -891,6 +899,29 @@ bool OptclObj::InvokeWithTypeInfVariant (Tcl_Interp *pInterp, long invokekind,
 
 			if (!RetrieveOutParams (pInterp, objc, objv, obp, dp))
 				return false;
+			if (ppResultInfo != NULL) {
+				// caller is requesting the typeinfo for the result
+				*ppResultInfo = NULL; // make sure that we definitely return a valid pointer
+				TYPEDESC * ptdesc = NULL;
+				switch (obp.m_dk) {
+				case DESCKIND_FUNCDESC:
+					ASSERT (obp.m_bp.lpfuncdesc != NULL);
+					ptdesc = & obp.m_bp.lpfuncdesc->elemdescFunc.tdesc;
+					break;
+				case DESCKIND_VARDESC:
+					ASSERT (obp.m_bp.lpvardesc != NULL);
+					ptdesc = & obp.m_bp.lpvardesc->elemdescVar.tdesc;
+					break;
+				}
+				// resolve any pointer types ...
+				while (ptdesc != NULL && ptdesc->vt == VT_PTR)
+					ptdesc = ptdesc->lptdesc;
+
+				// if we have a user defined type, return it!
+				if (ptdesc != NULL && ptdesc->vt == VT_USERDEFINED) 
+					pti->GetRefTypeInfo (ptdesc->hreftype, ppResultInfo);
+				
+			}
 			bOk = true;
 		}
 	}
@@ -920,17 +951,17 @@ bool OptclObj::InvokeWithTypeInfVariant (Tcl_Interp *pInterp, long invokekind,
  */
 bool OptclObj::InvokeWithTypeInf (Tcl_Interp *pInterp, long invokekind,
 								  int objc, Tcl_Obj *CONST objv[], 
-								  IDispatch *pDisp, ITypeInfo *pti, ITypeComp *pCmp)
+								  IUnknown *pUnk, ITypeInfo *pti, ITypeComp *pCmp)
 {
 	VARIANT varResult;
 	VariantInit(&varResult);
 	TObjPtr presult;
-
+	CComPtr<ITypeInfo> pResultInfo;
 	bool bok;
-	bok = InvokeWithTypeInfVariant (pInterp, invokekind, objc, objv, pDisp, pti, pCmp, varResult);
+	bok = InvokeWithTypeInfVariant (pInterp, invokekind, objc, objv, pUnk, pti, pCmp, varResult, &pResultInfo);
 
 	// set the result of the operation to the return value of the function
-	if (bok && (bok = var2obj(pInterp, varResult, presult)))
+	if (bok && (bok = var2obj(pInterp, varResult, pResultInfo, presult)))
 			Tcl_SetObjResult (pInterp, presult);
 	VariantClear(&varResult);
 	return bok;
@@ -964,7 +995,7 @@ bool OptclObj::InvokeNoTypeInf(	Tcl_Interp *pInterp, long invokekind,
 	bool bok;
 
 	if (bok = InvokeNoTypeInfVariant (pInterp, invokekind, objc, objv, pDisp, var)) {
-		if (bok = var2obj(pInterp, var, presult))
+		if (bok = var2obj(pInterp, var, NULL, presult))
 			Tcl_SetObjResult (pInterp, presult);
 		VariantClear(&var);
 	}
@@ -1050,9 +1081,9 @@ bool OptclObj::InvokeNoTypeInfVariant (	Tcl_Interp *pInterp, long invokekind,
  *-------------------------------------------------------------------------
  */
 bool OptclObj::GetProp (Tcl_Interp *pInterp, Tcl_Obj *name, 
-			  IDispatch *pdisp, ITypeInfo *pti, ITypeComp *ptc)
+			  IUnknown *punk, ITypeInfo *pti, ITypeComp *ptc)
 {
-	ASSERT (pInterp != NULL && name != NULL && pdisp != NULL);
+	ASSERT (pInterp != NULL && name != NULL && punk != NULL);
 	TObjPtr params;
 	bool bok;
 
@@ -1070,10 +1101,10 @@ bool OptclObj::GetProp (Tcl_Interp *pInterp, Tcl_Obj *name,
 
 		if (pti != NULL) {
 			ASSERT (ptc != NULL);
-			bok = InvokeWithTypeInf(pInterp, DISPATCH_PROPERTYGET, length, pplist, pdisp, pti, ptc);
+			bok = InvokeWithTypeInf(pInterp, DISPATCH_PROPERTYGET, length, pplist, punk, pti, ptc);
 		}
 		else {
-			bok = InvokeNoTypeInf (pInterp, DISPATCH_PROPERTYGET, length, pplist, pdisp);
+			bok = InvokeNoTypeInf (pInterp, DISPATCH_PROPERTYGET, length, pplist, reinterpret_cast<IDispatch*>(punk));
 		}
 
 		free(pplist);
@@ -1097,9 +1128,9 @@ bool OptclObj::GetProp (Tcl_Interp *pInterp, Tcl_Obj *name,
  *-------------------------------------------------------------------------
  */
 bool OptclObj::GetIndexedVariant (Tcl_Interp *pInterp, Tcl_Obj *name, 
-			  IDispatch *pdisp, ITypeInfo *pti, ITypeComp *ptc, VARIANT &varResult)
+			  IUnknown *punk, ITypeInfo *pti, ITypeComp *ptc, VARIANT &varResult, ITypeInfo **ppResultInfo)
 {
-	ASSERT (pInterp != NULL && name != NULL && pdisp != NULL);
+	ASSERT (pInterp != NULL && name != NULL && punk != NULL);
 	ASSERT (varResult.vt == VT_EMPTY);
 
 	TObjPtr params;
@@ -1120,22 +1151,34 @@ bool OptclObj::GetIndexedVariant (Tcl_Interp *pInterp, Tcl_Obj *name,
 
 		if (pti != NULL) {
 			ASSERT (ptc != NULL);
-			bok = InvokeWithTypeInfVariant (pInterp, invkind, length, pplist, pdisp, pti, ptc, varResult);
+			bok = InvokeWithTypeInfVariant (pInterp, invkind, length, pplist, punk, pti, ptc, varResult, ppResultInfo);
 		}
 		else {
-			bok = InvokeNoTypeInfVariant (pInterp, invkind, length, pplist, pdisp, varResult);
+			bok = InvokeNoTypeInfVariant (pInterp, invkind, length, pplist, reinterpret_cast<IDispatch*>(punk), varResult);
 		}
 		free(pplist);
 	}
 	return bok;
 }
 
+
+
+
+/*
+ *-------------------------------------------------------------------------
+ * OptclObj::SetProp --
+ *	Called to get the value of a property or the return type of method, with
+ * Result:
+ * Side effects:
+ *-------------------------------------------------------------------------
+ */
+
 bool	OptclObj::SetProp (Tcl_Interp *pInterp, 
 						   int paircount, Tcl_Obj * CONST namevalues[], 
-						   IDispatch *pdisp, ITypeInfo *pti, ITypeComp *ptc)
+						   IUnknown *punk, ITypeInfo *pti, ITypeComp *ptc)
 {
 	bool bok = true;
-	ASSERT (pInterp != NULL && paircount > 0 && namevalues != NULL && pdisp != NULL);
+	ASSERT (pInterp != NULL && paircount > 0 && namevalues != NULL && punk != NULL);
 	for (int i = 0; bok && i < paircount; i++)
 	{
 		TObjPtr params;
@@ -1155,10 +1198,10 @@ bool	OptclObj::SetProp (Tcl_Interp *pInterp,
 
 			if (pti != NULL) {
 				ASSERT (ptc != NULL);
-				bok = InvokeWithTypeInf(pInterp, DISPATCH_PROPERTYPUT, length, pplist, pdisp, pti, ptc);
+				bok = InvokeWithTypeInf(pInterp, DISPATCH_PROPERTYPUT, length, pplist, punk, pti, ptc);
 			}
 			else {
-				bok = InvokeNoTypeInf (pInterp, DISPATCH_PROPERTYPUT, length, pplist, pdisp);
+				bok = InvokeNoTypeInf (pInterp, DISPATCH_PROPERTYPUT, length, pplist, reinterpret_cast<IDispatch*>(punk));
 			}
 			namevalues += 2;
 			free(pplist);
@@ -1240,17 +1283,17 @@ bool OptclObj::GetPropVariantDispatch (Tcl_Interp *pInterp, const char*name,
  *
  *-------------------------------------------------------------------------
  */
-bool	OptclObj::ResolvePropertyObject (Tcl_Interp *pInterp, const char *sname, 
-								   IDispatch **ppdisp, ITypeInfo **ppinfo, ITypeComp **ppcmp /* = NULL*/)
+bool OptclObj::ResolvePropertyObject (Tcl_Interp *pInterp, const char *sname, 
+									  IUnknown **ppunk, ITypeInfo **ppinfo, 
+									  ITypeComp **ppcmp /* = NULL*/)
 {
 	USES_CONVERSION;
-	ASSERT (pInterp != NULL && ppdisp != NULL && sname != NULL);
+	ASSERT (pInterp != NULL && ppunk != NULL && sname != NULL);
 	// copy the string onto the stack
 	char *		szname;
-	char *		seps = ".";
+	char *		seps = ".";	// seperators
 	char *		szprop = NULL;
-	_variant_t	varobj;
-	VARIANT		varResult;
+
 
 	HRESULT		hr;
 	
@@ -1258,30 +1301,34 @@ bool	OptclObj::ResolvePropertyObject (Tcl_Interp *pInterp, const char *sname,
 	TObjPtr plist;
 	TObjPtr pokstring;
 
+	// copy the command string
 	szname = (char*)_alloca (strlen (sname) + 1);
 	strcpy (szname, sname);
+
+	// tokenize on the dot
+	// warning: this section will *note* quoted seperators correctly 
+	// ... *must* fix!
 	szprop = strtok(szname, seps);
-	CComQIPtr <IDispatch> current;
+	CComPtr <IUnknown> current;
 	CComPtr <ITypeInfo> pti;
 	CComPtr <ITypeComp> pcmp;
 
-	UINT	typecount = 0;
+	UINT	typecount = 0; // the total number of types in the type library
 
-	current = m_pcurrent;
-	pti = m_pti;
-	pcmp = m_ptc;
+	current	= m_pcurrent;
+	pti		= m_pti;
+	pcmp	= m_ptc;
 
 	pcmd.create();
-
-	VariantInit (&varResult);
 
 	try {
 		while (szprop != NULL)
 		{
+			CComVariant	varResult;
 			TObjPtr prop(szprop);
+			CComPtr<ITypeInfo> pResultInfo;
 
-			VariantClear(&varResult);
-			if (!GetIndexedVariant (pInterp, prop, current, pti, pcmp, varResult))
+			if (!GetIndexedVariant (pInterp, prop, current, pti, pcmp, varResult, &pResultInfo))
 				break;
 			
 			// check that it's an object
@@ -1291,37 +1338,47 @@ bool	OptclObj::ResolvePropertyObject (Tcl_Interp *pInterp, const char *sname,
 				Tcl_AppendResult (pInterp, szprop, "' is not an object", NULL);
 				break;
 			}
-
 			else
 			{
-				current = varResult.punkVal;
-				if (current == NULL)
-				{
-					Tcl_SetResult (pInterp, "'", TCL_STATIC);
-					Tcl_AppendResult (pInterp, szprop, "' is not a dispatchable object", NULL);
-					break;
-				}
-				typecount = 0;
-				pti = NULL;
-				pcmp = NULL;
+				if (pResultInfo) {
+					// we have type information for this
+					pti = pResultInfo;
+					current = varResult.punkVal;
+				} else {
+					current.Release();
+					if (FAILED(varResult.punkVal->QueryInterface(IID_IDispatch, reinterpret_cast<void**>(&current)))) {
+						Tcl_SetResult (pInterp, "unknown interface for '", TCL_STATIC);
+						Tcl_AppendResult (pInterp, szprop, "'", NULL);
+						break;
+					} 
+					typecount = 0;
+					pti = NULL;
+					
 
-				current->GetTypeInfoCount (&typecount);
-				if (typecount > 0) {
-					hr = current->GetTypeInfo (0, LOCALE_SYSTEM_DEFAULT, &pti);
-					if (SUCCEEDED(hr)) {
-						g_libs.EnsureCached (pti);
+					IDispatch *pdisp = reinterpret_cast<IDispatch*>(current.p);
+					pdisp->GetTypeInfoCount (&typecount);
+					if (typecount > 0) {
+						hr = pdisp->GetTypeInfo (0, LOCALE_SYSTEM_DEFAULT, &pti);
+						if (FAILED(hr)) 
+							throw hr;
+							
 					}
-					pti->GetTypeComp(&pcmp);
 				}
 			}
+
+			pcmp.Release();
+			g_libs.EnsureCached (pti);
+			pti->GetTypeComp(&pcmp);
 			
-			// get the next property
+			// get the next property - warning, doesn't work with quoted seperators
 			szprop = strtok(NULL, seps);
 		}
 		
 		*ppinfo = pti.Detach();
 		*ppcmp = pcmp.Detach();
-		*ppdisp = current.Detach ();
+		*ppunk = current.Detach ();
+		if (*ppunk == NULL) 
+			Tcl_SetResult (pInterp, "value resolved to a null object", TCL_STATIC);
 	}
 
 	catch (HRESULT hr)
@@ -1333,8 +1390,7 @@ bool	OptclObj::ResolvePropertyObject (Tcl_Interp *pInterp, const char *sname,
 	{
 		Tcl_SetResult (pInterp, error, TCL_STATIC);
 	}
-	VariantClear(&varResult);
-	return (szprop == NULL);
+	return (szprop == NULL && *ppunk != NULL);
 }
 
 
@@ -1843,5 +1899,3 @@ void OptclObj::ContainerWantsToDie ()
 	if (!m_destroypending)
 		g_objmap.Delete(this);
 }
-
-

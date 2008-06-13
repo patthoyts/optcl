@@ -4,7 +4,7 @@ package require optcl
 bind . <F2> {console show}
 
 wm title . {PDF Document in Tk}
-set pdf [optcl::new -window .pdf {d:/program files/adobe/acrobat3/acrobat.pdf}]
+set pdf [optcl::new -window .pdf {C:\Program Files\Adobe\Acrobat 4.0\Help\ENU\acrobat.pdf}]
 .pdf config -width 500 -height 300
 pack .pdf -fill both -expand 1
 

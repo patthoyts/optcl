@@ -46,7 +46,7 @@ public: // constructor / destructor
 	virtual ~ObjMap ();
 
 	OptclObj *	Create (Tcl_Interp *pInterp, const char * id, const char * path, bool start);
-	OptclObj *	Add (Tcl_Interp *pInterp, LPUNKNOWN punk);
+	OptclObj *	Add (Tcl_Interp *pInterp, LPUNKNOWN punk, ITypeInfo *pti = NULL);
 	OptclObj *	Find (LPUNKNOWN punk);
 	OptclObj *	Find (const char *name);
 
@@ -68,12 +68,12 @@ protected:
 	void		Delete (OptclObj *);
 	void		CreateCommand (OptclObj *);
 	void		DeleteCommand (OptclObj *);
-
+	void		ObjDump ();
 };
 
 
 // Global Variable Declaration!!!
 
-extern ObjMap	g_objmap; // once object map per application
+extern ObjMap	g_objmap; // one object map per application
 
 #endif // !defined(AFX_OBJMAP_H__8A11BC00_616B_11D4_8004_0040055861F2__INCLUDED_)

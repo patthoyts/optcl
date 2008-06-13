@@ -68,6 +68,10 @@ ObjMap::~ObjMap()
  */
 void ObjMap::DeleteAll ()
 {
+#ifdef _DEBUG
+	ObjDump();
+#endif // _DEBUG
+
 	ObjNameMap::iterator i;
 	for (i = m_namemap.begin(); i != m_namemap.end(); i++) {
 		OptclObj *pobj = *i;
@@ -79,8 +83,32 @@ void ObjMap::DeleteAll ()
 	m_unkmap.deltbl();
 }
 
+/*
+ *-------------------------------------------------------------------------
+ * ObjMap::ObjDump
+ *	Dumps the current contents of the object map to the Debug Stream
+ *
+ * Result:
+ *	None.
+ *
+ * Side Effects:
+ *	None.
+ *-------------------------------------------------------------------------
+ */
+void ObjMap::ObjDump () 
+{
+	TRACE("BEGIN: OpTcl Object Dump\n");
 
-
+	ObjNameMap::iterator i;
+	for (i = m_namemap.begin(); i != m_namemap.end(); i++) {
+		OptclObj *pobj = *i;
+		ASSERT (pobj != NULL);
+		TObjPtr interfacename;
+		pobj->InterfaceName(interfacename);
+		TRACE("\t%s %s %d\n", (char*)interfacename, pobj->m_name.c_str(), pobj->m_refcount);
+	}	
+	TRACE("END:   OpTcl Object Dump\n");
+}
 
 /*
  *-------------------------------------------------------------------------
@@ -119,13 +147,13 @@ OptclObj * ObjMap::Create (Tcl_Interp *pInterp, const char * id, const char * pa
 	if (m_unkmap.find(u, &ptmp) != NULL) {
 		ASSERT (ptmp != NULL);
 		delete pObj;
-		++ptmp->m_refcount;
+		Lock (ptmp);
 		return ptmp;
 	}
 
 	m_unkmap.set (u, pObj); 
 	m_namemap.set (*pObj, pObj); // implicit const char * cast
-	pObj->m_refcount = 1;
+	Lock(pObj);
 	CreateCommand (pObj);
 	return pObj;
 }
@@ -146,7 +174,7 @@ OptclObj * ObjMap::Create (Tcl_Interp *pInterp, const char * id, const char * pa
  *	None.
  *-------------------------------------------------------------------------
  */
-OptclObj *	ObjMap::Add (Tcl_Interp *pInterp, LPUNKNOWN punk)
+OptclObj *	ObjMap::Add (Tcl_Interp *pInterp, LPUNKNOWN punk, ITypeInfo *pti)
 {
 	ASSERT (punk != NULL);
 	CComPtr<IUnknown> t_unk;
@@ -162,19 +190,17 @@ OptclObj *	ObjMap::Add (Tcl_Interp *pInterp, LPUNKNOWN punk)
 
 	if (m_unkmap.find(u, &pObj) == NULL) {
 		pObj = new OptclObj();
-		if (!pObj->Attach(pInterp, punk))
+		if (!pObj->Attach(pInterp, punk, pti))
 		{
 			delete pObj;
 			pObj = NULL;
 		}
 		m_namemap.set(*pObj, pObj);
 		m_unkmap.set(u, pObj);
-		pObj->m_refcount = 1;
+		
 		CreateCommand (pObj);
-	} else {
-		++pObj->m_refcount;
 	}
-
+	Lock(pObj);
 	ASSERT (pObj != NULL);
 	return pObj;
 }
@@ -260,7 +286,7 @@ void ObjMap::DeleteCommand (OptclObj *po)
 		return;
 	
 	
-	CONST84 char * cmdname = Tcl_GetCommandName (po->m_pInterp, po->m_cmdtoken);
+	const char * cmdname = Tcl_GetCommandName (po->m_pInterp, po->m_cmdtoken);
 	if (cmdname == NULL)
 		return;
 	Tcl_CmdInfo cmdinf;
@@ -295,7 +321,8 @@ void ObjMap::DeleteCommand (OptclObj *po)
 void ObjMap::Delete (OptclObj *pObj)
 {
 	ASSERT (pObj != NULL);
-
+	TRACE("Deleting: ");
+	TRACE_OPTCLOBJ(pObj);
 	// first ensure that we delete the objects command
 	DeleteCommand(pObj);	
 	m_namemap.delete_entry (*pObj);
@@ -350,6 +377,7 @@ void ObjMap::Lock (OptclObj *po)
 {
 	ASSERT (po != NULL);
 	++po->m_refcount;
+	TRACE_OPTCLOBJ(po);
 }
 
 
@@ -370,7 +398,9 @@ void ObjMap::Lock (OptclObj *po)
 void ObjMap::Unlock(OptclObj *po)
 {
 	ASSERT (po != NULL);
-	if (--po->m_refcount == 0)
+	--(po->m_refcount);
+	TRACE_OPTCLOBJ(po);
+	if (po->m_refcount == 0)
 		Delete (po);
 }
 

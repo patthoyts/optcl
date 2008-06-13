@@ -537,7 +537,7 @@ int BindingProps::Eval (OptclObj *pObj, DISPPARAMS *pDispParams, LPVARIANT pVarR
 		for (count = 0; count < pDispParams->cArgs; count++)
 		{
 			TObjPtr param;
-			if (!var2obj(m_pInterp, pDispParams->rgvarg[pDispParams->cArgs - count - 1], param, ppObjs+count))
+			if (!var2obj(m_pInterp, pDispParams->rgvarg[pDispParams->cArgs - count - 1], NULL, param, ppObjs+count))
 				break;
 			cmd.lappend(param, m_pInterp);
 		}
@@ -567,7 +567,7 @@ int BindingProps::Eval (OptclObj *pObj, DISPPARAMS *pDispParams, LPVARIANT pVarR
 
 	if (result == TCL_ERROR)
 	{
-		// do we have a exception storage
+		// do we have an exception storage
 		if (pExcepInfo != NULL)
 		{
 			// fill it in

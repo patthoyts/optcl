@@ -41,5 +41,5 @@ int		TypeLib_Init (Tcl_Interp *pInterp);
 
 
 extern CComPtr<IMalloc> g_pmalloc;
-
+extern bool g_bTkInit;
 #endif// _OPTCL_H_B229D2A0_616A_11d4_8004_0040055861F2

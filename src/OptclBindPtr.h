@@ -76,17 +76,27 @@ public:
 
 	short		OptclBindPtr::cParamsOpt()
 	{
+		int pin;
+		int oparams = 0;
 		ASSERT (m_bp.lpfuncdesc != NULL);
 		switch (m_dk) {
 		case DESCKIND_FUNCDESC:
-			return m_bp.lpfuncdesc->cParamsOpt;
+			// this method doesn't work very well
+			// return m_bp.lpfuncdesc->cParamsOpt;
+			// so ...
+			for (pin = 0; pin < m_bp.lpfuncdesc->cParams; pin++) {
+				if (m_bp.lpfuncdesc->lprgelemdescParam[pin].paramdesc.wParamFlags & PARAMFLAG_FOPT)
+					oparams++;
+			}
+			break;
 		case DESCKIND_IMPLICITAPPOBJ:
 		case DESCKIND_VARDESC:
-			return 1;
+			oparams = 1;
+			break;
 		default:
 			ASSERT (FALSE);
-			return 0;
 		}
+		return oparams;
 	}
 
 	ELEMDESC *	OptclBindPtr::param(short param)
