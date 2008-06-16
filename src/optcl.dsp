@@ -105,8 +105,8 @@ BSC32=bscmake.exe
 # ADD BASE BSC32 /nologo
 # ADD BSC32 /nologo
 LINK32=link.exe
-# ADD BASE LINK32 /nologo /machine:IX86
-# ADD LINK32 /nologo /machine:IX86 /out:"Release\optcl30s.lib" /lib
+# ADD BASE LINK32 /nologo
+# ADD LINK32 /nologo /lib /out:"Release\optcl30s.lib"
 
 !ENDIF 
 
